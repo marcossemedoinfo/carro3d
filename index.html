@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Opel Corsa B 1998 — Simulador 3D Realista</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+        "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Viewport Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- Loading & Engine Start Overlay -->
+  <div id="loading-overlay">
+    <div class="loader-card">
+      <div class="badge-sim">SIMULAÇÃO FÍSICA &bull; TRAÇÃO DIANTEIRA (FWD)</div>
+      <h1>OPEL CORSA B <span class="accent">1998</span></h1>
+      <p class="subtitle">Física Real de Suspensão MacPherson, Pneus Pacejka, Áudio Espacial 3D e Emissão de Partículas</p>
+
+      <div id="progress-section">
+        <div class="progress-bar-track">
+          <div id="progress-bar-fill"></div>
+        </div>
+        <div id="loading-status">Inicializando engine 3D e carregando modelos...</div>
+      </div>
+
+      <div class="controls-grid">
+        <div class="ctrl-item"><kbd>W</kbd> Acelerar</div>
+        <div class="ctrl-item"><kbd>S</kbd> Frear / Ré</div>
+        <div class="ctrl-item"><kbd>A</kbd> <kbd>D</kbd> Direção</div>
+        <div class="ctrl-item"><kbd>ESPAÇO</kbd> Freio de Mão</div>
+        <div class="ctrl-item"><kbd>+</kbd> <kbd>-</kbd> Passar Marchas</div>
+        <div class="ctrl-item"><kbd>M</kbd> Câmbio Auto / Manual</div>
+        <div class="ctrl-item"><kbd>L</kbd> Ligar / Desligar Faróis</div>
+        <div class="ctrl-item"><kbd>I</kbd> Ligar / Desligar Motor</div>
+        <div class="ctrl-item"><kbd>C</kbd> Câmera / <kbd>R</kbd> Reset</div>
+      </div>
+
+      <button id="start-btn" disabled>
+        <span class="key-icon">&#9889;</span> DAR PARTIDA NO CORSA
+      </button>
+    </div>
+  </div>
+
+  <!-- Top Telemetry & Controls HUD -->
+  <div id="top-hud" class="hud-hidden">
+    <div class="hud-panel telemetry-panel">
+      <div class="panel-title">TELEMETRIA FWD &amp; SUSPENSÃO</div>
+      <div class="susp-grid">
+        <div class="wheel-stat">
+          <span class="w-label">DE (Tração)</span>
+          <div class="bar-mini"><div id="susp-fl" class="bar-fill"></div></div>
+          <span id="slip-fl" class="slip-dot"></span>
+        </div>
+        <div class="wheel-stat">
+          <span class="w-label">DD (Tração)</span>
+          <div class="bar-mini"><div id="susp-fr" class="bar-fill"></div></div>
+          <span id="slip-fr" class="slip-dot"></span>
+        </div>
+        <div class="wheel-stat">
+          <span class="w-label">TE</span>
+          <div class="bar-mini"><div id="susp-rl" class="bar-fill"></div></div>
+          <span id="slip-rl" class="slip-dot"></span>
+        </div>
+        <div class="wheel-stat">
+          <span class="w-label">TD</span>
+          <div class="bar-mini"><div id="susp-rr" class="bar-fill"></div></div>
+          <span id="slip-rr" class="slip-dot"></span>
+        </div>
+      </div>
+      <div class="audio-3d-indicator">
+        <span class="pulse-dot"></span> Áudio 3D HRTF: Motor (Dianteira) &bull; Escapamento (Traseira)
+      </div>
+    </div>
+
+    <div class="hud-panel actions-panel">
+      <button id="btn-transmission" class="hud-btn active-mode" title="Atalho: Tecla M">
+        CÂMBIO: <strong id="trans-label">MANUAL</strong>
+      </button>
+      <button id="btn-lights" class="hud-btn engine-off" title="Atalho: Tecla L">
+        FARÓIS: <strong id="lights-label">OFF</strong>
+      </button>
+      <button id="btn-ignition" class="hud-btn engine-on" title="Atalho: Tecla I">
+        MOTOR: <strong id="engine-label">LIGADO</strong>
+      </button>
+      <button id="btn-camera" class="hud-btn" title="Atalho: Tecla C">
+        CÂMERA: <strong id="cam-label">PERSEGUIÇÃO</strong>
+      </button>
+      <button id="btn-spawn" class="hud-btn" title="Alternar Avenida">
+        PISTA: <strong id="spawn-label">AVENIDA 1</strong>
+      </button>
+      <button id="btn-reset" class="hud-btn" title="Atalho: Tecla R">
+        REPOSICIONAR <kbd>R</kbd>
+      </button>
+    </div>
+  </div>
+
+  <!-- Notification Banner for Cut-Off / Drift / Engine -->
+  <div id="status-banner" class="hud-hidden"></div>
+
+  <!-- Bottom Right Instrument Cluster (Tachometer, Gear, Speedometer, Pedals) -->
+  <div id="dashboard-hud" class="hud-hidden">
+    <div class="pedals-cluster">
+      <div class="pedal-col">
+        <div class="pedal-track"><div id="bar-throttle" class="pedal-fill throttle"></div></div>
+        <span>ACEL <kbd>W</kbd></span>
+      </div>
+      <div class="pedal-col">
+        <div class="pedal-track"><div id="bar-brake" class="pedal-fill brake"></div></div>
+        <span>FREIO <kbd>S</kbd></span>
+      </div>
+      <div class="pedal-col">
+        <div class="pedal-track"><div id="bar-handbrake" class="pedal-fill handbrake"></div></div>
+        <span>MÃO <kbd>ESP</kbd></span>
+      </div>
+    </div>
+
+    <div class="gauge-wrapper">
+      <canvas id="tachometer-canvas" width="240" height="240"></canvas>
+      <div class="gauge-center-info">
+        <div id="gear-display" class="gear-box">N</div>
+        <div class="speed-readout">
+          <span id="speed-value">0</span>
+          <small>km/h</small>
+        </div>
+        <div id="rpm-readout">0 RPM</div>
+      </div>
+      <div id="redline-lamp" class="shift-light">CORTE DE GIRO</div>
+    </div>
+  </div>
+
+  <!-- Bottom Left Controls Reminder -->
+  <div id="controls-helper" class="hud-hidden">
+    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis</div>
+    <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>I</kbd> Ignição</div>
+    <div><kbd>C</kbd> Câmera (Perseguição / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
+
