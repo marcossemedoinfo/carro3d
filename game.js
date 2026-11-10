@@ -20,17 +20,17 @@ const COLLISION_WALLS = 4;
 const SPAWN_POINTS = [
   {
     name: 'AVENIDA 1 (PRINCIPAL)',
-    pos: new THREE.Vector3(5.976 * CITY_SCALE, 0.42, -1.86 * CITY_SCALE),
+    pos: new THREE.Vector3(5.976 * CITY_SCALE, -0.42, -1.86 * CITY_SCALE),
     yaw: 0 // Olhando para -Z (avenida principal aberta em direção à ponte)
   },
   {
     name: 'AVENIDA 2 (LESTE)',
-    pos: new THREE.Vector3(10.626 * CITY_SCALE, 0.85, -7.66 * CITY_SCALE),
+    pos: new THREE.Vector3(10.626 * CITY_SCALE, 0.15, -7.66 * CITY_SCALE),
     yaw: 0
   },
   {
     name: 'AVENIDA CENTRAL',
-    pos: new THREE.Vector3(5.986 * CITY_SCALE, 0.65, -5.66 * CITY_SCALE),
+    pos: new THREE.Vector3(5.986 * CITY_SCALE, -0.05, -5.66 * CITY_SCALE),
     yaw: 0
   }
 ];
@@ -686,9 +686,8 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     }
   });
 
-  const roadVerts = [];
-  const roadIndices = [];
-  let roadIndexOffset = 0;
+  const ROAD_SECTOR_SIZE = 40.0;
+  const roadSectorMap = new Map();
 
   const wallSegments = [];
   const dedupWallSet = new Set();
@@ -741,10 +740,23 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       normal.divideScalar(doubleArea);
 
       // 1. Asfalto, Avenidas, Calçadas e Rampas: superfícies transitáveis (normal.y > 0.62)
+      // Agrupamos por setores para que cada CANNON.Trimesh tenha no máximo ~1.000 triângulos,
+      // evitando o estouro do Int16Array do Cannon-es que corrompe índices maiores que 32.767!
       if (normal.y > 0.62 && maxY < 1.65 && minY > -1.2) {
-        roadVerts.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-        roadIndices.push(roadIndexOffset, roadIndexOffset + 1, roadIndexOffset + 2);
-        roadIndexOffset += 3;
+        const midX = (v0.x + v1.x + v2.x) / 3;
+        const midZ = (v0.z + v1.z + v2.z) / 3;
+        const sx = Math.floor(midX / ROAD_SECTOR_SIZE);
+        const sz = Math.floor(midZ / ROAD_SECTOR_SIZE);
+        const sKey = `${sx}_${sz}`;
+
+        let sRoad = roadSectorMap.get(sKey);
+        if (!sRoad) {
+          sRoad = { verts: [], indices: [], offset: 0 };
+          roadSectorMap.set(sKey, sRoad);
+        }
+        sRoad.verts.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+        sRoad.indices.push(sRoad.offset, sRoad.offset + 1, sRoad.offset + 2);
+        sRoad.offset += 3;
       }
       // 2. Cercas, Muretas, Guardrails e Fachadas de Prédios que nascem no chão
       else if (Math.abs(normal.y) < 0.32 && (maxY - minY) > 0.38 && minY < 0.40) {
@@ -794,9 +806,12 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   }
   await new Promise((r) => setTimeout(r, 0));
 
-  // Cria o corpo sólido de Asfalto (Trimesh estático contínuo para o RaycastVehicle)
-  if (roadVerts.length > 0) {
-    const roadTrimesh = new CANNON.Trimesh(roadVerts, roadIndices);
+  // Cria os corpos sólidos de Asfalto setorizados (Trimesh ultra-estável por setor)
+  let totalRoadTris = 0;
+  roadSectorMap.forEach((sRoad) => {
+    if (sRoad.verts.length === 0) return;
+    totalRoadTris += sRoad.indices.length / 3;
+    const roadTrimesh = new CANNON.Trimesh(sRoad.verts, sRoad.indices);
     const roadBody = new CANNON.Body({
       mass: 0,
       material: groundMaterial,
@@ -805,7 +820,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     roadBody.collisionFilterGroup = COLLISION_GROUND;
     roadBody.collisionFilterMask = COLLISION_CHASSIS | COLLISION_WALLS;
     physicsWorld.addBody(roadBody);
-  }
+  });
 
   if (onProgress) {
     onProgress(95, 'Distribuindo obstáculos e cercas em setores espaciais otimizados...');
@@ -861,11 +876,12 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   });
   safetyPlane.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
   safetyPlane.position.set(0, -2.5, 0);
-  safetyPlane.collisionFilterGroup = COLLISION_GROUND;
+  safetyPlane.collisionFilterGroup = COLLISION_GROUND | COLLISION_WALLS;
+  safetyPlane.collisionFilterMask = COLLISION_CHASSIS;
   physicsWorld.addBody(safetyPlane);
 
   console.log(
-    `Mapa 3D Carregado com sucesso: ${roadIndices.length / 3} triângulos de asfalto e ${wallSegments.length} obstáculos em ${sectorGroups.size} setores espaciais!`
+    `Mapa 3D Carregado com sucesso: ${totalRoadTris} triângulos de asfalto em ${roadSectorMap.size} setores e ${wallSegments.length} obstáculos em ${sectorGroups.size} setores espaciais!`
   );
 }
 
@@ -1079,7 +1095,7 @@ function setupCorsaPhysics(comOffsetY) {
   chassisBody.addShape(cabinBox, new CANNON.Vec3(0, 0.52 * CAR_SCALE, 0.15 * CAR_SCALE));
 
   chassisBody.collisionFilterGroup = COLLISION_CHASSIS;
-  chassisBody.collisionFilterMask = COLLISION_WALLS;
+  chassisBody.collisionFilterMask = COLLISION_WALLS | COLLISION_GROUND;
 
   vehicle = new CANNON.RaycastVehicle({
     chassisBody,
@@ -1856,6 +1872,9 @@ function animate(now) {
 
   if (state.loaded) {
     world.step(1 / 60, dt, 3);
+    if (chassisBody && chassisBody.position.y < -3.5) {
+      resetCarToSpawn(state.spawnIdx);
+    }
     updateVehiclePhysicsAndEffects(dt);
     syncVisualMeshes();
     updateCamera(dt);
