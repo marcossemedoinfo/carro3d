@@ -717,7 +717,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     // Descarte instantâneo por AABB do Mesh: se todo o objeto estiver acima ou abaixo da zona transitável, ignora!
     if (!geom.boundingBox) geom.computeBoundingBox();
     meshAABB.copy(geom.boundingBox).applyMatrix4(mesh.matrixWorld);
-    if (meshAABB.min.y > 2.5 || meshAABB.max.y < -1.5) {
+    if (meshAABB.min.y > 6.5 || meshAABB.max.y < -3.0) {
       continue;
     }
 
@@ -736,20 +736,20 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       const minY = Math.min(v0.y, v1.y, v2.y);
       const maxY = Math.max(v0.y, v1.y, v2.y);
 
-      if (minY > 2.2 || maxY < -1.5) continue;
+      if (minY > 6.0 || maxY < -2.6) continue;
 
       edge1.subVectors(v1, v0);
       edge2.subVectors(v2, v0);
       normal.crossVectors(edge1, edge2);
       const doubleArea = normal.length();
 
-      if (doubleArea < 0.06) continue;
+      if (doubleArea < 0.0005) continue;
       normal.divideScalar(doubleArea);
 
-      // 1. Asfalto, Avenidas, Calçadas e Rampas: superfícies transitáveis (normal.y > 0.62)
-      // Agrupamos por setores para que cada CANNON.Trimesh tenha no máximo ~1.000 triângulos,
-      // evitando o estouro do Int16Array do Cannon-es que corrompe índices maiores que 32.767!
-      if (normal.y > 0.62 && maxY < 1.65 && minY > -1.2) {
+      // 1. Asfalto, Avenidas, Calçadas, Pontes, Viadutos e Rampas: superfícies transitáveis (normal.y > 0.45)
+      // Agrupamos por setores de 40m x 40m para que cada CANNON.Trimesh tenha no máximo ~1.700 triângulos,
+      // eliminando buracos no asfalto e evitando o estouro do Int16Array do Cannon-es (< 32.767)!
+      if (normal.y > 0.45 && maxY < 5.8 && minY > -2.5) {
         const midX = (v0.x + v1.x + v2.x) / 3;
         const midZ = (v0.z + v1.z + v2.z) / 3;
         const sx = Math.floor(midX / ROAD_SECTOR_SIZE);
@@ -765,8 +765,8 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
         sRoad.indices.push(sRoad.offset, sRoad.offset + 1, sRoad.offset + 2);
         sRoad.offset += 3;
       }
-      // 2. Cercas, Muretas, Guardrails e Fachadas de Prédios que nascem no chão
-      else if (Math.abs(normal.y) < 0.32 && (maxY - minY) > 0.38 && minY < 0.40) {
+      // 2. Cercas, Muretas, Guardrails e Fachadas de Prédios nas avenidas e pontes
+      else if (Math.abs(normal.y) < 0.35 && (maxY - minY) > 0.40 && minY < 4.5 && maxY > -1.8) {
         let maxDist2D = 0;
         let bestA = v0;
         let bestB = v1;
@@ -780,17 +780,19 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
 
         if (maxDist2D >= 0.70) {
           const midX = (bestA.x + bestB.x) * 0.5;
+          const midY = (minY + maxY) * 0.5;
           const midZ = (bestA.z + bestB.z) * 0.5;
           const angleY = Math.atan2(bestB.x - bestA.x, bestB.z - bestA.z);
 
-          const dedupKey = `${Math.round(midX / 2.0)}_${Math.round(midZ / 2.0)}_${Math.round(angleY * 1.5)}`;
+          const dedupKey = `${Math.round(midX / 2.5)}_${Math.round(midZ / 2.5)}_${Math.round(midY / 1.5)}_${Math.round(angleY * 1.5)}`;
           if (!dedupWallSet.has(dedupKey)) {
             dedupWallSet.add(dedupKey);
             wallSegments.push({
               x: midX,
-              y: 0.70,
+              y: midY,
               z: midZ,
               len: Math.max(0.8, Math.min(maxDist2D, 6.0)),
+              height: Math.max(0.8, Math.min(maxY - minY, 2.5)),
               angleY
             });
           }
@@ -867,7 +869,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       sectorBody.collisionFilterMask = COLLISION_CHASSIS;
 
       chunk.forEach((seg) => {
-        const box = new CANNON.Box(new CANNON.Vec3(0.20, 1.25, seg.len * 0.5));
+        const box = new CANNON.Box(new CANNON.Vec3(0.20, seg.height * 0.5, seg.len * 0.5));
         qWall.setFromEuler(0, seg.angleY, 0);
         sectorBody.addShape(box, new CANNON.Vec3(seg.x, seg.y, seg.z), qWall);
       });
@@ -882,9 +884,9 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     shape: new CANNON.Plane()
   });
   safetyPlane.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  safetyPlane.position.set(0, -2.5, 0);
+  safetyPlane.position.set(0, -3.5, 0);
   safetyPlane.collisionFilterGroup = COLLISION_GROUND | COLLISION_WALLS;
-  safetyPlane.collisionFilterMask = COLLISION_CHASSIS;
+  safetyPlane.collisionFilterMask = COLLISION_CHASSIS | COLLISION_GROUND;
   physicsWorld.addBody(safetyPlane);
 
   console.log(
@@ -1769,6 +1771,11 @@ function updateHUD() {
   if (mGearCluster) {
     mGearCluster.style.display = state.transmission === 'MANUAL' ? 'flex' : 'none';
   }
+
+  const mSpawnTxt = document.getElementById('m-spawn-txt');
+  if (mSpawnTxt) {
+    mSpawnTxt.textContent = `AV. ${state.spawnIdx + 1}`;
+  }
 }
 
 // ============================================================================
@@ -1891,6 +1898,7 @@ function setMobileMode(enabled) {
   const touchHudLabel = document.getElementById('touch-hud-label');
   const btnToggleTouch = document.getElementById('btn-toggle-touch');
   const mobileControls = document.getElementById('mobile-controls');
+  const topHud = document.getElementById('top-hud');
   const controlsHelper = document.getElementById('controls-helper');
 
   if (toggleBtn) {
@@ -1907,15 +1915,21 @@ function setMobileMode(enabled) {
     btnToggleTouch.classList.toggle('active-mode', enabled);
   }
 
+  if (enabled) {
+    document.body.classList.add('mobile-active');
+  } else {
+    document.body.classList.remove('mobile-active');
+  }
+
   if (state.started) {
     if (enabled) {
       mobileControls?.classList.remove('hud-hidden');
+      topHud?.classList.add('hud-hidden');
       controlsHelper?.classList.add('hud-hidden');
-      document.body.classList.add('mobile-active');
     } else {
       mobileControls?.classList.add('hud-hidden');
+      topHud?.classList.remove('hud-hidden');
       controlsHelper?.classList.remove('hud-hidden');
-      document.body.classList.remove('mobile-active');
     }
   }
 }
@@ -2119,6 +2133,11 @@ function setupMobileControls() {
     changeGear(state.gear - 1);
   });
 
+  document.getElementById('mbtn-spawn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    resetCarToSpawn(state.spawnIdx + 1);
+  });
+
   document.getElementById('mbtn-camera')?.addEventListener('click', (e) => {
     e.preventDefault();
     cycleCameraMode();
@@ -2127,6 +2146,11 @@ function setupMobileControls() {
   document.getElementById('mbtn-reset')?.addEventListener('click', (e) => {
     e.preventDefault();
     resetCarToSpawn(state.spawnIdx);
+  });
+
+  document.getElementById('mbtn-switch-pc')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setMobileMode(false);
   });
 
   // Auto-detecção inteligente de tela de toque (se for celular/tablet, pré-ativa de início)
@@ -2143,7 +2167,6 @@ startBtn.addEventListener('click', () => {
   state.started = true;
 
   document.getElementById('loading-overlay').classList.add('hud-hidden');
-  document.getElementById('top-hud').classList.remove('hud-hidden');
   document.getElementById('dashboard-hud').classList.remove('hud-hidden');
 
   setMobileMode(state.mobileMode);
@@ -2178,7 +2201,7 @@ function animate(now) {
 
   if (state.loaded) {
     world.step(1 / 60, dt, 3);
-    if (chassisBody && chassisBody.position.y < -3.5) {
+    if (chassisBody && chassisBody.position.y < -4.5) {
       resetCarToSpawn(state.spawnIdx);
     }
     updateVehiclePhysicsAndEffects(dt);

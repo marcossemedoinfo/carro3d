@@ -25,6 +25,7 @@ body, html {
 .hud-hidden {
   opacity: 0 !important;
   pointer-events: none !important;
+  visibility: hidden !important;
 }
 
 /* Loading Overlay */
@@ -873,8 +874,18 @@ body.mobile-active #controls-helper {
   display: none !important;
 }
 
-body.mobile-active #top-hud .telemetry-panel {
-  display: none;
+/* Oculta totalmente o Top HUD do PC quando o modo Mobile estiver ativo (evita qualquer sobreposição) */
+body.mobile-active #top-hud {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+/* Oculta os controles mobile quando o modo mobile NÃO estiver ativo */
+body:not(.mobile-active) #mobile-controls {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
 }
 
 /* Position dashboard HUD above pedals when mobile controls are active */
