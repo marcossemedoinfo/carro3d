@@ -30,7 +30,7 @@
         <div class="progress-bar-track">
           <div id="progress-bar-fill"></div>
         </div>
-        <div id="loading-status">Inicializando engine 3D e carregando modelos...</div>
+        <div id="loading-status">0%</div>
       </div>
 
       <div class="controls-grid">
@@ -122,6 +122,19 @@
   <!-- Notification Banner for Cut-Off / Drift / Engine -->
   <div id="status-banner" class="hud-hidden"></div>
 
+  <!-- Minimapa Quadrado com Pontas Arredondadas (Canto Esquerdo) -->
+  <div id="minimap-container" class="hud-hidden" title="Minimapa da Cidade">
+    <canvas id="minimap-canvas" width="300" height="300"></canvas>
+    <div class="minimap-badge">
+      <span class="minimap-dot"></span>
+      <span id="minimap-title">GPS &bull; MAPA</span>
+    </div>
+    <div class="minimap-compass" id="minimap-compass" title="Bússola (Clique para fixar o Norte)">
+      <span class="compass-n">N</span>
+    </div>
+    <div class="minimap-scale" id="minimap-scale">100m</div>
+  </div>
+
   <!-- Bottom Right Instrument Cluster (Tachometer, Gear, Speedometer, Pedals) -->
   <div id="dashboard-hud" class="hud-hidden">
     <div class="pedals-cluster">
@@ -157,7 +170,7 @@
   <div id="controls-helper" class="hud-hidden">
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis</div>
     <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>I</kbd> Ignição</div>
-    <div><kbd>C</kbd> Câmera (Perseguição / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
+    <div><kbd>C</kbd> Câmera (Perseguição / Cockpit Volante / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
   </div>
 
   <!-- Controles de Toque para Celular (Joystick Analógico + Pedais + Ações Rápidas) -->

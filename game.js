@@ -110,7 +110,7 @@ const state = {
   burnoutIntensity: 0,
   isDrifting: false,
   driftAngleDeg: 0,
-  cameraMode: 0,          // 0: Perseguição, 1: Capô/Motor, 2: Escapamento Traseiro, 3: Órbita Livre
+  cameraMode: 0,          // 0: Perseguição, 1: Cockpit (Volante), 2: Capô/Motor, 3: Escapamento Traseiro, 4: Órbita Livre
   spawnIdx: 0,
   orbitYaw: 0,
   orbitPitch: 0.18,
@@ -475,8 +475,14 @@ let headlightMat = null;
 let brakeLightMat = null;
 let reverseLightMat = null;
 
+// Ponto pivô e eixo de rotação 3D real do volante do Opel Corsa B
+const RAW_STEERING_CENTER = new THREE.Vector3(33.42, -86.88, -28.38);
+const STEERING_AXIS = new THREE.Vector3(0.0112, -0.2086, 0.9779).normalize();
+const CAMERA_MODE_NAMES = ['PERSEGUIÇÃO', 'COCKPIT (VOLANTE)', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓRBITA 3D'];
+
 function splitCorsaModelIntoChassisAndWheels(gltfScene) {
   const chassisGroup = new THREE.Group();
+  const steeringWheelGroup = new THREE.Group();
   const wheelVisualGroups = [
     new THREE.Group(), // 0: FL (Dianteira Esquerda)
     new THREE.Group(), // 1: FR (Dianteira Direita)
@@ -548,9 +554,15 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       clonedMat.envMapIntensity = 1.3;
     } else if (matName.includes('windowglass') || matName.includes('clearglass')) {
       clonedMat.transparent = true;
-      clonedMat.opacity = 0.48;
+      clonedMat.opacity = 0.35;
       clonedMat.roughness = 0.08;
       clonedMat.metalness = 0.1;
+      clonedMat.depthWrite = false;
+      clonedMat.side = THREE.DoubleSide;
+    } else if (matName.includes('interior')) {
+      clonedMat.roughness = 0.85;
+      clonedMat.metalness = 0.05;
+      clonedMat.side = THREE.DoubleSide;
     } else if (matName.includes('chrome') || matName.includes('rim')) {
       clonedMat.metalness = 0.85;
       clonedMat.roughness = 0.18;
@@ -579,7 +591,8 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       '3': [],
       headlight: [],
       brakelight: [],
-      reverselight: []
+      reverselight: [],
+      steeringwheel: []
     };
 
     const triCount = indexAttr ? indexAttr.count / 3 : posAttr.count / 3;
@@ -596,9 +609,14 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       const cy = (y0 + y1 + y2) / 3;
       const cz = (z0 + z1 + z2) / 3;
 
+      const isObject43 = nodeName === 'object_43';
+      const isSteeringWheelTri = isObject43 && (cx > 12.0 && cz > -41.0 && cy > -106.0 && cy < -69.0);
+
       if (isPureWheelMaterial || isInsideWheelCylinder(cx, cy, cz)) {
         const wIdx = getWheelIndex(cx, cz);
         buckets[wIdx].push(i0, i1, i2);
+      } else if (isSteeringWheelTri) {
+        buckets.steeringwheel.push(i0, i1, i2);
       } else if (matName === 'redglass') {
         buckets.brakelight.push(i0, i1, i2);
       } else if (matName === 'clearglass' && cz < -120) {
@@ -615,6 +633,7 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       if (indices.length === 0) return;
 
       const isWheel = ['0', '1', '2', '3'].includes(bKey);
+      const isSteeringWheel = bKey === 'steeringwheel';
       const bIdx = isWheel ? parseInt(bKey, 10) : -1;
 
       const subGeom = new THREE.BufferGeometry();
@@ -622,7 +641,11 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       const newNorm = normAttr ? new Float32Array(indices.length * 3) : null;
       const newUv = uvAttr ? new Float32Array(indices.length * 2) : null;
 
-      const centerRaw = bIdx >= 0 ? WHEEL_HUBS_LOCAL[bIdx].rawCenter : new THREE.Vector3(0, 0, 0);
+      const centerRaw = isWheel
+        ? WHEEL_HUBS_LOCAL[bIdx].rawCenter
+        : isSteeringWheel
+        ? RAW_STEERING_CENTER
+        : new THREE.Vector3(0, 0, 0);
       const scaleFactor = 0.01 * CAR_SCALE;
 
       for (let k = 0; k < indices.length; k++) {
@@ -660,7 +683,9 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       subMesh.castShadow = !['headlight', 'brakelight', 'reverselight'].includes(bKey);
       subMesh.receiveShadow = false;
 
-      if (bIdx === -1) {
+      if (isSteeringWheel) {
+        steeringWheelGroup.add(subMesh);
+      } else if (bIdx === -1) {
         chassisGroup.add(subMesh);
       } else {
         wheelVisualGroups[bIdx].add(subMesh);
@@ -673,9 +698,19 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
     c.position.y -= CHASSIS_COM_OFFSET_Y;
   });
 
+  const scaleFactor = 0.01 * CAR_SCALE;
+  const steeringPivotLocal = new THREE.Vector3(
+    -RAW_STEERING_CENTER.x * scaleFactor,
+    -RAW_STEERING_CENTER.y * scaleFactor - CHASSIS_COM_OFFSET_Y,
+    RAW_STEERING_CENTER.z * scaleFactor
+  );
+  steeringWheelGroup.position.copy(steeringPivotLocal);
+  chassisGroup.add(steeringWheelGroup);
+
   return {
     chassisGroup,
     wheelVisualGroups,
+    steeringWheelGroup,
     chassisComOffsetY: CHASSIS_COM_OFFSET_Y
   };
 }
@@ -894,6 +929,245 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   console.log(
     `Mapa 3D Carregado com sucesso: ${totalRoadTris} triângulos de asfalto em ${roadSectorMap.size} setores e ${wallSegments.length} obstáculos em ${sectorGroups.size} setores espaciais!`
   );
+
+  if (minimapRenderer) {
+    minimapRenderer.buildRoadPaths(roadSectorMap, wallSegments);
+  }
+}
+
+// ============================================================================
+// MINIMAPA VETORIAL EM TEMPO REAL (CANVAS 2D DE ALTA PERFORMANCE)
+// ============================================================================
+let minimapRenderer = null;
+
+class MinimapRenderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.roadSectors = new Map();
+    this.wallSegments = [];
+    this.SECTOR_SIZE = 40.0;
+    this.viewRadius = 90.0;
+    this.rotating = true; // Rotaciona com a frente do carro por padrão
+
+    // Permite ao jogador clicar no minimapa para alternar entre "Mapa Rotativo" e "Norte Fixo"
+    const container = document.getElementById('minimap-container');
+    if (container) {
+      container.addEventListener('click', () => {
+        this.rotating = !this.rotating;
+        const titleEl = document.getElementById('minimap-title');
+        if (titleEl) {
+          titleEl.textContent = this.rotating ? 'GPS • ROTAÇÃO' : 'GPS • NORTE FIXO';
+        }
+      });
+    }
+  }
+
+  buildRoadPaths(roadSectorMap, wallSegments) {
+    this.roadSectors.clear();
+    roadSectorMap.forEach((sRoad, sKey) => {
+      const path = new Path2D();
+      const verts = sRoad.verts;
+      const triCount = verts.length / 9;
+      for (let t = 0; t < triCount; t++) {
+        const o = t * 9;
+        path.moveTo(verts[o], verts[o + 2]);
+        path.lineTo(verts[o + 3], verts[o + 5]);
+        path.lineTo(verts[o + 6], verts[o + 8]);
+        path.closePath();
+      }
+      this.roadSectors.set(sKey, path);
+    });
+
+    if (wallSegments) {
+      this.wallSegments = wallSegments;
+    }
+  }
+
+  render(carPos, carQuat, speedKmh) {
+    if (!this.canvas || !this.ctx) return;
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Fundo azul escuro estilo radar militar/GPS
+    ctx.fillStyle = '#0b1220';
+    ctx.fillRect(0, 0, w, h);
+
+    // Direção frontal do carro (no jogo, frente é -Z)
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(carQuat);
+    // Ângulo para alinhar a frente do carro com o topo da tela
+    const carHeading = Math.atan2(-forward.x, -forward.z);
+    const mapRotation = this.rotating ? carHeading : 0;
+
+    // Zoom dinâmico proporcional à velocidade (80m a 125m)
+    const targetRadius = 80.0 + Math.min(speedKmh / 160, 1.0) * 45.0;
+    this.viewRadius += (targetRadius - this.viewRadius) * 0.08;
+    const scale = (w * 0.45) / this.viewRadius;
+
+    // Atualiza escala textual e bússola
+    const scaleEl = document.getElementById('minimap-scale');
+    if (scaleEl) {
+      scaleEl.textContent = `${Math.round(this.viewRadius)}m`;
+    }
+    const compassEl = document.getElementById('minimap-compass');
+    if (compassEl) {
+      // Aponta para o Norte verdadeiro (-Z)
+      const compassAngle = this.rotating ? -carHeading : 0;
+      compassEl.style.transform = `rotate(${compassAngle}rad)`;
+    }
+
+    ctx.save();
+    // Centraliza o carro no meio do minimapa
+    ctx.translate(cx, cy);
+    ctx.rotate(mapRotation);
+    ctx.scale(scale, scale);
+    ctx.translate(-carPos.x, -carPos.z);
+
+    // Bounding box dos setores visíveis
+    const margin = this.viewRadius * 1.35;
+    const minSx = Math.floor((carPos.x - margin) / this.SECTOR_SIZE);
+    const maxSx = Math.floor((carPos.x + margin) / this.SECTOR_SIZE);
+    const minSz = Math.floor((carPos.z - margin) / this.SECTOR_SIZE);
+    const maxSz = Math.floor((carPos.z + margin) / this.SECTOR_SIZE);
+
+    // 1. Asfalto das ruas e avenidas
+    ctx.fillStyle = '#1e293b';
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.4 / scale;
+    ctx.lineJoin = 'round';
+
+    for (let sx = minSx; sx <= maxSx; sx++) {
+      for (let sz = minSz; sz <= maxSz; sz++) {
+        const key = `${sx}_${sz}`;
+        const path = this.roadSectors.get(key);
+        if (path) {
+          ctx.fill(path);
+          ctx.stroke(path);
+        }
+      }
+    }
+
+    // 2. Muretas e contornos de obstáculos próximos
+    if (this.wallSegments.length > 0) {
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+      ctx.lineWidth = 1.0 / scale;
+      const segMaxDistSq = margin * margin;
+      for (let i = 0; i < this.wallSegments.length; i++) {
+        const seg = this.wallSegments[i];
+        const dx = seg.x - carPos.x;
+        const dz = seg.z - carPos.z;
+        if (dx * dx + dz * dz < segMaxDistSq) {
+          const cos = Math.cos(seg.angleY);
+          const sin = Math.sin(seg.angleY);
+          const hx = sin * (seg.len * 0.5);
+          const hz = cos * (seg.len * 0.5);
+          ctx.beginPath();
+          ctx.moveTo(seg.x - hx, seg.z - hz);
+          ctx.lineTo(seg.x + hx, seg.z + hz);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // 3. Marcadores de Avenidas / Spawns
+    SPAWN_POINTS.forEach((sp, idx) => {
+      const dx = sp.pos.x - carPos.x;
+      const dz = sp.pos.z - carPos.z;
+      if (dx * dx + dz * dz < margin * margin) {
+        ctx.save();
+        ctx.translate(sp.pos.x, sp.pos.z);
+        ctx.rotate(-mapRotation); // Mantém o rótulo legível
+        ctx.fillStyle = idx === state.spawnIdx ? '#38bdf8' : '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(0, 0, 4.5 / scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2 / scale;
+        ctx.stroke();
+
+        ctx.font = `bold 10px sans-serif`;
+        ctx.fillStyle = '#fef3c7';
+        ctx.textAlign = 'center';
+        ctx.fillText(`AV ${idx + 1}`, 0, -7.0 / scale);
+        ctx.restore();
+      }
+    });
+
+    ctx.restore();
+
+    // 4. Anéis de alcance do radar concêntricos
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.14)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, (35.0 * scale), 0, Math.PI * 2);
+    ctx.arc(cx, cy, (70.0 * scale), 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Retículo sutil
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.10)';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - h * 0.44);
+    ctx.lineTo(cx, cy + h * 0.44);
+    ctx.moveTo(cx - w * 0.44, cy);
+    ctx.lineTo(cx + w * 0.44, cy);
+    ctx.stroke();
+
+    // 5. Projeção dos faróis (feixe de luz para frente)
+    const beamAngle = this.rotating ? -Math.PI * 0.5 : Math.atan2(-forward.z, forward.x) - Math.PI;
+    const fovWidth = Math.PI * 0.32;
+    const beamRadius = Math.min(w * 0.38, 50.0 * scale);
+    const grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, beamRadius);
+    grad.addColorStop(0, state.headlightsOn ? 'rgba(254, 243, 199, 0.42)' : 'rgba(56, 189, 248, 0.18)');
+    grad.addColorStop(0.6, state.headlightsOn ? 'rgba(254, 243, 199, 0.16)' : 'rgba(56, 189, 248, 0.06)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, beamRadius, beamAngle - fovWidth * 0.5, beamAngle + fovWidth * 0.5);
+    ctx.closePath();
+    ctx.fill();
+
+    // 6. Ícone do Carro (Seta esportiva triangular com contorno neon)
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (!this.rotating) {
+      // Quando mapa está com Norte fixo, o carro gira
+      const carAngle = Math.atan2(forward.x, -forward.z);
+      ctx.rotate(carAngle);
+    }
+
+    // Sombra do carro
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.beginPath();
+    ctx.ellipse(0, 1.5, 7, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Chassi do carro no radar
+    ctx.fillStyle = state.isDrifting ? '#ec4899' : '#f59e0b';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(0, -10.5);     // Ponta dianteira
+    ctx.lineTo(6.0, 7.5);     // Traseira direita
+    ctx.lineTo(0, 4.5);       // Recuo aerodinâmico
+    ctx.lineTo(-6.0, 7.5);    // Traseira esquerda
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Ponto central da coordenada do veículo
+    ctx.fillStyle = '#38bdf8';
+    ctx.beginPath();
+    ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
 }
 
 // ============================================================================
@@ -972,6 +1246,7 @@ let vehicle = null;
 let chassisBody = null;
 let corsaChassisVisual = null;
 let corsaWheelVisuals = [];
+let corsaSteeringWheelVisual = null;
 
 // Luzes funcionais 3D do Corsa (Faróis Halógenos Branco-Quente, Luz de Freio Suave e Luz de Ré)
 let headlightSpotL = null;
@@ -988,6 +1263,12 @@ const wheelSpinAngles = [0, 0, 0, 0];
 const progressFill = document.getElementById('progress-bar-fill');
 const loadingStatus = document.getElementById('loading-status');
 const startBtn = document.getElementById('start-btn');
+
+function updateLoadingProgress(pct) {
+  const rounded = Math.min(100, Math.max(0, Math.round(pct)));
+  if (progressFill) progressFill.style.width = `${rounded}%`;
+  if (loadingStatus) loadingStatus.textContent = `${rounded}%`;
+}
 
 function setupCarLights(chassisGroup) {
   const warmHalogenColor = 0xffe082;
@@ -1025,38 +1306,44 @@ async function initSimulation() {
   try {
     const gltfLoader = new GLTFLoader();
 
-    loadingStatus.textContent = 'Carregando modelo 3D do Opel Corsa B 1998...';
+    const minimapCanvas = document.getElementById('minimap-canvas');
+    if (minimapCanvas) {
+      minimapRenderer = new MinimapRenderer(minimapCanvas);
+    }
+
+    updateLoadingProgress(0);
     const corsaGltf = await new Promise((res, rej) => {
       gltfLoader.load(
         './opel_corsa_b_3door_1998.glb',
         res,
         (xhr) => {
           if (xhr.total) {
-            progressFill.style.width = `${Math.round((xhr.loaded / xhr.total) * 35)}%`;
+            updateLoadingProgress((xhr.loaded / xhr.total) * 35);
           }
         },
         rej
       );
     });
 
-    loadingStatus.textContent = 'Configurando suspensão MacPherson, faróis halógenos, freio e ré...';
+    updateLoadingProgress(35);
     const splitResult = splitCorsaModelIntoChassisAndWheels(corsaGltf.scene);
     corsaChassisVisual = splitResult.chassisGroup;
     corsaWheelVisuals = splitResult.wheelVisualGroups;
+    corsaSteeringWheelVisual = splitResult.steeringWheelGroup;
 
     setupCarLights(corsaChassisVisual);
 
     scene.add(corsaChassisVisual);
     corsaWheelVisuals.forEach((wg) => scene.add(wg));
 
-    loadingStatus.textContent = 'Carregando mapa 3D da Cidade (city.glb)...';
+    updateLoadingProgress(38);
     const cityGltf = await new Promise((res, rej) => {
       gltfLoader.load(
         './city.glb',
         res,
         (xhr) => {
           if (xhr.total) {
-            progressFill.style.width = `${35 + Math.round((xhr.loaded / xhr.total) * 40)}%`;
+            updateLoadingProgress(38 + (xhr.loaded / xhr.total) * 32);
           }
         },
         rej
@@ -1067,23 +1354,21 @@ async function initSimulation() {
     cityRoot.scale.set(CITY_SCALE, CITY_SCALE, CITY_SCALE);
     scene.add(cityRoot);
 
-    loadingStatus.textContent = 'Construindo física do asfalto contínuo e obstáculos...';
-    await buildCityPhysicsFromModel(cityRoot, world, groundMat, chassisMat, (pct, msg) => {
-      progressFill.style.width = `${70 + Math.round(pct * 0.15)}%`;
-      loadingStatus.textContent = msg;
+    updateLoadingProgress(70);
+    await buildCityPhysicsFromModel(cityRoot, world, groundMat, chassisMat, (pct) => {
+      updateLoadingProgress(70 + pct * 0.15);
     });
 
-    loadingStatus.textContent = 'Sintetizando loops contínuos do motor, escapamento, corte de giro e derrapagem...';
+    updateLoadingProgress(85);
     await carAudio.loadAll((p) => {
-      progressFill.style.width = `${85 + Math.round(p * 15)}%`;
+      updateLoadingProgress(85 + p * 15);
     });
     carAudio.setupNodes(corsaChassisVisual);
 
     setupCorsaPhysics(splitResult.chassisComOffsetY);
 
     state.loaded = true;
-    progressFill.style.width = '100%';
-    loadingStatus.textContent = 'Simulação pronta! Clique abaixo para girar a chave e ligar o Corsa.';
+    updateLoadingProgress(100);
     startBtn.disabled = false;
   } catch (err) {
     console.error('Erro ao inicializar simulação:', err);
@@ -1527,6 +1812,12 @@ function syncVisualMeshes() {
     chassisBody.quaternion.w
   );
 
+  // Animação 3D realista do volante sincronizada com o ângulo de esterço
+  if (corsaSteeringWheelVisual) {
+    const steerVisualAngle = state.currentSteer * 3.4;
+    corsaSteeringWheelVisual.setRotationFromAxisAngle(STEERING_AXIS, steerVisualAngle);
+  }
+
   for (let i = 0; i < 4; i++) {
     vehicle.updateWheelTransform(i);
     const wi = vehicle.wheelInfos[i];
@@ -1573,6 +1864,7 @@ function updateCamera(dt) {
   }
 
   if (state.cameraMode === 0) {
+    // 0: PERSEGUIÇÃO
     const dist = (5.35 + Math.min(state.speedKmh / 180, 1.0) * 0.55) * CAR_SCALE;
     const height = 1.62 * CAR_SCALE;
     const behind = smoothCamHeading.clone().multiplyScalar(-1);
@@ -1582,13 +1874,36 @@ function updateCamera(dt) {
     camCurrentPos.y = carPos.y + height + Math.sin(state.orbitPitch) * (1.5 * CAR_SCALE);
     camCurrentLook.copy(carPos).add(new THREE.Vector3(0, 0.32 * CAR_SCALE, 0)).addScaledVector(smoothCamHeading, 1.4 * CAR_SCALE);
   } else if (state.cameraMode === 1) {
+    // 1: COCKPIT (VOLANTE FUNCIONAL)
+    // Câmera posicionada exatamente atrás do volante, na linha dos olhos do motorista
+    const driverEyeOffset = new THREE.Vector3(-0.35 * CAR_SCALE, 0.54 * CAR_SCALE, 0.12 * CAR_SCALE);
+    camCurrentPos.copy(carPos).add(driverEyeOffset.clone().applyQuaternion(carQuat));
+
+    // Vetor de visão olhando para frente através do para-brisa, enquadrando o volante e o asfalto à frente
+    const lookOffset = new THREE.Vector3(0, -0.06, -1.0).normalize();
+    if (state.isPointerDown || Math.abs(state.orbitYaw) > 0.01 || Math.abs(state.orbitPitch) > 0.01) {
+      lookOffset.applyAxisAngle(new THREE.Vector3(1, 0, 0), state.orbitPitch);
+      lookOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), state.orbitYaw);
+    }
+    lookOffset.applyQuaternion(carQuat);
+    camCurrentLook.copy(camCurrentPos).addScaledVector(lookOffset, 6.0);
+
+    // Retorno suave da cabeça para frente quando soltar o mouse / toque
+    if (!state.isPointerDown) {
+      state.orbitYaw = THREE.MathUtils.lerp(state.orbitYaw, 0, Math.min(1.0, dt * 6.0));
+      state.orbitPitch = THREE.MathUtils.lerp(state.orbitPitch, 0, Math.min(1.0, dt * 6.0));
+    }
+  } else if (state.cameraMode === 2) {
+    // 2: CAPÔ (MOTOR)
     camCurrentPos.copy(carPos).add(new THREE.Vector3(0, 0.68 * CAR_SCALE, -0.38 * CAR_SCALE).applyQuaternion(carQuat));
     const lookDir = forward.clone().applyAxisAngle(up, state.orbitYaw);
     camCurrentLook.copy(camCurrentPos).addScaledVector(lookDir, 10.0);
-  } else if (state.cameraMode === 2) {
+  } else if (state.cameraMode === 3) {
+    // 3: ESCAPAMENTO
     camCurrentPos.copy(carPos).add(new THREE.Vector3(-0.62 * CAR_SCALE, 0.28 * CAR_SCALE, 3.05 * CAR_SCALE).applyQuaternion(carQuat));
     camCurrentLook.copy(carPos).add(new THREE.Vector3(-0.25 * CAR_SCALE, 0.05 * CAR_SCALE, 0.8 * CAR_SCALE).applyQuaternion(carQuat));
   } else {
+    // 4: ÓRBITA LIVRE 3D
     const radius = 3.9 * CAR_SCALE;
     const angle = state.orbitYaw;
     const localOffset = new THREE.Vector3(
@@ -1818,10 +2133,11 @@ function toggleEngineIgnition() {
 }
 
 function cycleCameraMode() {
-  state.cameraMode = (state.cameraMode + 1) % 4;
-  state.orbitYaw = state.cameraMode === 3 ? Math.PI * 0.35 : 0;
-  const names = ['PERSEGUIÇÃO', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓRBITA 3D'];
-  document.getElementById('cam-label').textContent = names[state.cameraMode];
+  state.cameraMode = (state.cameraMode + 1) % 5;
+  state.orbitYaw = state.cameraMode === 4 ? Math.PI * 0.35 : 0;
+  state.orbitPitch = state.cameraMode === 1 ? 0 : 0.18;
+  const label = document.getElementById('cam-label');
+  if (label) label.textContent = CAMERA_MODE_NAMES[state.cameraMode];
 }
 
 window.addEventListener('keydown', (e) => {
@@ -2157,6 +2473,7 @@ startBtn.addEventListener('click', () => {
 
   document.getElementById('loading-overlay').classList.add('hud-hidden');
   document.getElementById('dashboard-hud').classList.remove('hud-hidden');
+  document.getElementById('minimap-container')?.classList.remove('hud-hidden');
 
   setMobileMode(state.mobileMode);
 
@@ -2198,7 +2515,12 @@ function animate(now) {
     updateCamera(dt);
     smokeSystem.update(dt, camera);
     carAudio.update(dt);
-    if (state.started) updateHUD();
+    if (state.started) {
+      updateHUD();
+      if (minimapRenderer && chassisBody) {
+        minimapRenderer.render(chassisBody.position, chassisBody.quaternion, state.speedKmh);
+      }
+    }
   }
 
   renderer.render(scene, camera);
