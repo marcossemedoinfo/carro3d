@@ -71,9 +71,9 @@ const CORSA_SPECS = {
   maxSuspensionTravel: 0.22 * CAR_SCALE,
   dampingCompression: 4.8,
   dampingRelaxation: 5.6,
-  rollInfluence: 0.12,                    // Permite inclinação visual natural da carroceria nas curvas e drifts
-  frictionSlipNormal: 3.2,                // Aderência firme de pneu de borracha no asfalto seco
-  frictionSlipHandbrake: 1.85             // Pneu traseiro perde aderência lateral com atrito cinético de borracha no asfalto (DRIFT CONTROLÁVEL!)
+  rollInfluence: 0.12,                    // Permite inclinação visual natural da carroceria nas curvas
+  frictionSlipNormal: 1.65,               // Coeficiente de atrito real de pneu de borracha no asfalto seco
+  frictionSlipHandbrake: 1.15             // Atrito dinâmico das rodas traseiras quando travadas pelo freio de mão
 };
 
 // No modelo original do Corsa (onde Y apontava para baixo), aplicamos rotação de 180° em Z
@@ -1261,72 +1261,22 @@ function updateVehiclePhysicsAndEffects(dt) {
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer < 0 ? 1.04 : 0.96), 1); // FR
 
   // ==========================================================================
-  // FÍSICA DE CONDUÇÃO PRECISA & DRIFT EXCLUSIVO NO FREIO DE MÃO (ESTILO NFSU2)
+  // FREIO DE MÃO MECÂNICO REALISTA (SIMULAÇÃO FÍSICA NATURAL SEM SCRIPTS)
   // ==========================================================================
-  const isHandbraking = state.handbrakeInput > 0.45;
-  const horizSpeed = Math.hypot(chassisBody.velocity.x, chassisBody.velocity.z);
-  const isMovingFast = horizSpeed > 3.0 && state.speedKmh > 18;
+  const isHandbraking = state.handbrakeInput > 0.5;
 
-  // O DRIFT SÓ ACONTECE SE O JOGADOR PUXAR O FREIO DE MÃO!
-  // Se não estiver com o freio de mão puxado, o carro NÃO derrapa, garantindo 100% de aderência no asfalto!
-  const isDrifting = isHandbraking && isMovingFast;
-  state.isDrifting = isDrifting;
-
-  // Ângulo de derrapagem / Slip Angle (diferença entre a direção do bico e o vetor velocidade)
-  const driftSlipAngle = isDrifting
-    ? Math.atan2(lateralSpeedMs, Math.max(1.2, Math.abs(state.forwardSpeedMs)))
-    : 0;
-  const absDriftAngle = Math.abs(driftSlipAngle);
-  state.driftAngleDeg = (absDriftAngle * 180) / Math.PI;
-
-  if (isDrifting) {
-    // 1. Aderência calibrada para drift controlado (relação suave de pneus 2.70 na frente / 2.25 atrás)
-    // Evita a chicotada violenta e permite que a traseira escorregue com peso e suavidade
-    vehicle.wheelInfos[0].frictionSlip = 2.70;
-    vehicle.wheelInfos[1].frictionSlip = 2.70;
-    vehicle.wheelInfos[2].frictionSlip = 2.25;
-    vehicle.wheelInfos[3].frictionSlip = 2.25;
-
-    // 2. Trava absoluta de velocidade angular (Giro de no máximo 1.25 rad/s ~ 71°/s)
-    // É ISSO QUE ELIMINA O 180° INSTANTÂNEO! O carro NUNCA gira rápido como pião!
-    const MAX_DRIFT_YAW = 1.25;
-    if (Math.abs(chassisBody.angularVelocity.y) > MAX_DRIFT_YAW) {
-      chassisBody.angularVelocity.y = Math.sign(chassisBody.angularVelocity.y) * MAX_DRIFT_YAW;
-    }
-
-    // 3. Limitador Físico Rígido de Ângulo de Drift (~33 graus, padrão Need For Speed Underground 2)
-    // Se o carro começar a passar de 33 graus, CORTA imediatamente a rotação e aplica contra-torque maciço
-    const MAX_DRIFT_ANGLE = 0.58; // ~33 graus
-    if (absDriftAngle > MAX_DRIFT_ANGLE) {
-      // Zera a aceleração de giro que estava fazendo o carro rodar
-      if (Math.sign(chassisBody.angularVelocity.y) === Math.sign(driftSlipAngle)) {
-        chassisBody.angularVelocity.y *= 0.25;
-      }
-      const excess = absDriftAngle - MAX_DRIFT_ANGLE;
-      const counterTorque = THREE.MathUtils.clamp(excess * 8500, 1200, 6000);
-      chassisBody.applyTorque(new CANNON.Vec3(0, -Math.sign(driftSlipAngle) * counterTorque, 0));
-    } else if (Math.abs(targetSteer) > 0.04) {
-      const isCounter = (Math.sign(targetSteer) !== Math.sign(driftSlipAngle)) && absDriftAngle > 0.12;
-      if (isCounter) {
-        // Contra-esterço: resposta imediata no volante para alinhar o carro na saída da curva
-        chassisBody.applyTorque(new CANNON.Vec3(0, Math.sign(targetSteer) * 1400, 0));
-      } else {
-        // Iniciação suave de curva no freio de mão
-        chassisBody.applyTorque(new CANNON.Vec3(0, Math.sign(targetSteer) * 320, 0));
-      }
-    }
-
-    // 4. Manutenção de velocidade na curva (puxada de FWD para não estancar o drift)
-    if (state.throttleInput > 0.1) {
-      const thrust = state.throttleInput * 420;
-      chassisBody.applyForce(
-        new CANNON.Vec3(tempChassisForward.x * thrust, 0, tempChassisForward.z * thrust),
-        chassisBody.position
-      );
-    }
+  if (isHandbraking) {
+    // Na vida real, o freio de mão mecânico atua exclusivamente travando as rodas traseiras.
+    // O pneu traseiro travado passa de atrito estático (1.65) para atrito cinético de deslizamento (1.15).
+    // As rodas dianteiras continuam rolando e esterçando com aderência total (1.65).
+    // Pela pura lei da inércia, a traseira solta de forma suave e realista, sem força nem script artificial!
+    vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
+    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
   } else {
-    // CONDUÇÃO NORMAL: 100% DE ADERÊNCIA NO ASFALTO (SEM DERRAPAGENS EM CURVAS COMUNS)
-    // O carro obedece ao volante como um esportivo de verdade, colado no asfalto!
+    // Condução normal: as 4 rodas têm 100% de aderência integral no asfalto (1.65)
+    // O carro faz a curva colado no chão, sem derrapagens forçadas
     vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
     vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
     vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipNormal;
@@ -1417,9 +1367,9 @@ function updateVehiclePhysicsAndEffects(dt) {
   vehicle.applyEngineForce(0, 3);
 
   const serviceBrakeFront = state.brakeInput * 42;
-  const serviceBrakeRear = state.brakeInput * 22;
-  // Freio de mão calibrado para travar o giro traseiro mantendo o embalo e velocidade do drift
-  const handbrakeRear = isHandbraking ? 12.0 : 0;
+  const serviceBrakeRear = state.brakeInput * 24;
+  // Freio de mão mecânico real (aplica torque de travamento nas rodas traseiras 2 e 3)
+  const handbrakeRear = isHandbraking ? 36 : 0;
 
   vehicle.setBrake(serviceBrakeFront, 0);
   vehicle.setBrake(serviceBrakeFront, 1);
@@ -1499,7 +1449,7 @@ function updateVehiclePhysicsAndEffects(dt) {
     if (isHardBrakingHighSpeed) {
       wSkid = Math.max(wSkid, THREE.MathUtils.clamp((state.speedKmh - 28) / 60, 0.50, 1.0));
     }
-    if (i >= 2 && (isHandbrakeDrifting || isDrifting)) {
+    if (i >= 2 && isHandbraking && state.speedKmh > 8) {
       wSkid = Math.max(wSkid, 0.85);
     }
 
@@ -1775,11 +1725,8 @@ function updateHUD() {
         ? `LIMITE DA ${state.gear}ª MARCHA (${maxG} KM/H) — TROQUE DE MARCHA (+)`
         : 'CORTE DE GIRO ATIVO (6.500+ RPM)';
     banner.classList.remove('hud-hidden');
-  } else if (state.isDrifting || state.skidIntensity > 0.45) {
-    const angleText = state.driftAngleDeg > 5 ? ` (${Math.round(state.driftAngleDeg)}°)` : '';
-    banner.textContent = state.handbrakeInput > 0.3
-      ? `DRIFT NO FREIO DE MÃO${angleText}`
-      : `DRIFT CONTROLADO • NFSU2${angleText}`;
+  } else if (state.handbrakeInput > 0.5 && state.speedKmh > 6) {
+    banner.textContent = 'FREIO DE MÃO ACIONADO';
     banner.classList.remove('hud-hidden');
   } else {
     banner.classList.add('hud-hidden');
