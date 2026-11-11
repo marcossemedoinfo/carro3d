@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as CANNON from 'cannon-es';
 
 // ============================================================================
@@ -111,7 +110,7 @@ const state = {
   burnoutIntensity: 0,
   isDrifting: false,
   driftAngleDeg: 0,
-  cameraMode: 0,          // 0: Perseguição, 1: Cockpit (Volante), 2: Capô/Motor, 3: Escapamento Traseiro, 4: Órbita Livre
+  cameraMode: 0,          // 0: Perseguição, 1: Capô/Motor, 2: Escapamento Traseiro, 3: Órbita Livre
   spawnIdx: 0,
   orbitYaw: 0,
   orbitPitch: 0.18,
@@ -476,92 +475,10 @@ let headlightMat = null;
 let brakeLightMat = null;
 let reverseLightMat = null;
 
-// Ponto pivô exato do aro do volante e eixo de rotação 3D real da coluna de direção (~30° inclinada)
-const RAW_STEERING_CENTER = new THREE.Vector3(33.3133, -87.5426, -28.7008);
-const STEERING_AXIS = new THREE.Vector3(0.0, 0.4973, 0.8676).normalize();
-const CAMERA_MODE_NAMES = ['PERSEGUIÇÃO', 'COCKPIT (VOLANTE)', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓRBITA 3D'];
-
-// Separa cirurgicamente os componentes conectados do volante (aro, raios e buzina)
-// da coluna fixa do painel no mesh interior do Corsa (evita rasgar triângulos ou deixar o volante estático)
-function buildSteeringWheelConnectedVertexSet(posAttr, indexAttr) {
-  const vCount = posAttr.count;
-  const parent = new Int32Array(vCount);
-  for (let i = 0; i < vCount; i++) parent[i] = i;
-
-  function find(i) {
-    let root = i;
-    while (parent[root] !== root) root = parent[root];
-    let curr = i;
-    while (curr !== root) {
-      const nxt = parent[curr];
-      parent[curr] = root;
-      curr = nxt;
-    }
-    return root;
-  }
-
-  function union(a, b) {
-    const ra = find(a);
-    const rb = find(b);
-    if (ra !== rb) parent[ra] = rb;
-  }
-
-  // Solda vértices que compartilham a mesma posição 3D (costuras de UV)
-  const posMap = new Map();
-  for (let i = 0; i < vCount; i++) {
-    const key = `${Math.round(posAttr.getX(i) * 10)}_${Math.round(posAttr.getY(i) * 10)}_${Math.round(posAttr.getZ(i) * 10)}`;
-    const prev = posMap.get(key);
-    if (prev !== undefined) {
-      union(i, prev);
-    } else {
-      posMap.set(key, i);
-    }
-  }
-
-  const triCount = indexAttr ? indexAttr.count / 3 : vCount / 3;
-  for (let t = 0; t < triCount; t++) {
-    const i0 = indexAttr ? indexAttr.getX(t * 3) : t * 3;
-    const i1 = indexAttr ? indexAttr.getX(t * 3 + 1) : t * 3 + 1;
-    const i2 = indexAttr ? indexAttr.getX(t * 3 + 2) : t * 3 + 2;
-    union(i0, i1);
-    union(i1, i2);
-  }
-
-  const compBounds = new Map();
-  for (let i = 0; i < vCount; i++) {
-    const r = find(i);
-    const x = posAttr.getX(i);
-    const y = posAttr.getY(i);
-    const z = posAttr.getZ(i);
-    let b = compBounds.get(r);
-    if (!b) {
-      b = { minX: x, maxX: x, minY: y, maxY: y, minZ: z, maxZ: z };
-      compBounds.set(r, b);
-    } else {
-      if (x < b.minX) b.minX = x;
-      if (x > b.maxX) b.maxX = x;
-      if (y < b.minY) b.minY = y;
-      if (y > b.maxY) b.maxY = y;
-      if (z < b.minZ) b.minZ = z;
-      if (z > b.maxZ) b.maxZ = z;
-    }
-  }
-
-  const steeringVertices = new Uint8Array(vCount);
-  for (let i = 0; i < vCount; i++) {
-    const b = compBounds.get(find(i));
-    // Os 11 componentes do volante ficam no lado esquerdo do motorista (minX > 12)
-    // e à frente do acabamento fixo da coluna de direção (minZ > -41)
-    if (b && b.minX > 12.0 && b.minZ > -41.0 && b.minY > -106.0 && b.maxY < -69.0) {
-      steeringVertices[i] = 1;
-    }
-  }
-  return steeringVertices;
-}
+const CAMERA_MODE_NAMES = ['PERSEGUIÇÃO', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓRBITA 3D'];
 
 function splitCorsaModelIntoChassisAndWheels(gltfScene) {
   const chassisGroup = new THREE.Group();
-  const steeringWheelGroup = new THREE.Group();
   const wheelVisualGroups = [
     new THREE.Group(), // 0: FL (Dianteira Esquerda)
     new THREE.Group(), // 1: FR (Dianteira Direita)
@@ -662,16 +579,6 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
     const uvAttr = geom.attributes.uv;
     const indexAttr = geom.index;
 
-    // No glTF do Corsa, o Mesh 43 (2802 vértices, material 'interior') está associado ao Node 45 ('Object_45')
-    const isInteriorSteeringMesh =
-      nodeName === 'object_45' ||
-      nodeName === 'object_43' ||
-      (matName.includes('interior') && posAttr.count === 2802);
-
-    const steeringVertMask = isInteriorSteeringMesh
-      ? buildSteeringWheelConnectedVertexSet(posAttr, indexAttr)
-      : null;
-
     const buckets = {
       '-1': [],
       '0': [],
@@ -680,8 +587,7 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       '3': [],
       headlight: [],
       brakelight: [],
-      reverselight: [],
-      steeringwheel: []
+      reverselight: []
     };
 
     const triCount = indexAttr ? indexAttr.count / 3 : posAttr.count / 3;
@@ -698,13 +604,9 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       const cy = (y0 + y1 + y2) / 3;
       const cz = (z0 + z1 + z2) / 3;
 
-      const isSteeringWheelTri = steeringVertMask !== null && steeringVertMask[i0] === 1;
-
       if (isPureWheelMaterial || isInsideWheelCylinder(cx, cy, cz)) {
         const wIdx = getWheelIndex(cx, cz);
         buckets[wIdx].push(i0, i1, i2);
-      } else if (isSteeringWheelTri) {
-        buckets.steeringwheel.push(i0, i1, i2);
       } else if (matName === 'redglass') {
         buckets.brakelight.push(i0, i1, i2);
       } else if (matName === 'clearglass' && cz < -120) {
@@ -721,7 +623,6 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       if (indices.length === 0) return;
 
       const isWheel = ['0', '1', '2', '3'].includes(bKey);
-      const isSteeringWheel = bKey === 'steeringwheel';
       const bIdx = isWheel ? parseInt(bKey, 10) : -1;
 
       const subGeom = new THREE.BufferGeometry();
@@ -729,11 +630,7 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       const newNorm = normAttr ? new Float32Array(indices.length * 3) : null;
       const newUv = uvAttr ? new Float32Array(indices.length * 2) : null;
 
-      const centerRaw = isWheel
-        ? WHEEL_HUBS_LOCAL[bIdx].rawCenter
-        : isSteeringWheel
-        ? RAW_STEERING_CENTER
-        : new THREE.Vector3(0, 0, 0);
+      const centerRaw = isWheel ? WHEEL_HUBS_LOCAL[bIdx].rawCenter : new THREE.Vector3(0, 0, 0);
       const scaleFactor = 0.01 * CAR_SCALE;
 
       for (let k = 0; k < indices.length; k++) {
@@ -771,9 +668,7 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       subMesh.castShadow = !['headlight', 'brakelight', 'reverselight'].includes(bKey);
       subMesh.receiveShadow = false;
 
-      if (isSteeringWheel) {
-        steeringWheelGroup.add(subMesh);
-      } else if (bIdx === -1) {
+      if (bIdx === -1) {
         chassisGroup.add(subMesh);
       } else {
         wheelVisualGroups[bIdx].add(subMesh);
@@ -786,19 +681,9 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
     c.position.y -= CHASSIS_COM_OFFSET_Y;
   });
 
-  const scaleFactor = 0.01 * CAR_SCALE;
-  const steeringPivotLocal = new THREE.Vector3(
-    -RAW_STEERING_CENTER.x * scaleFactor,
-    -RAW_STEERING_CENTER.y * scaleFactor - CHASSIS_COM_OFFSET_Y,
-    RAW_STEERING_CENTER.z * scaleFactor
-  );
-  steeringWheelGroup.position.copy(steeringPivotLocal);
-  chassisGroup.add(steeringWheelGroup);
-
   return {
     chassisGroup,
     wheelVisualGroups,
-    steeringWheelGroup,
     chassisComOffsetY: CHASSIS_COM_OFFSET_Y
   };
 }
@@ -811,9 +696,10 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
 
   const meshes = [];
   cityScene.traverse((child) => {
+    child.matrixAutoUpdate = false;
     if (child.isMesh && child.geometry && child.geometry.attributes.position) {
       child.castShadow = false;
-      child.receiveShadow = true;
+      child.receiveShadow = false;
       meshes.push(child);
     }
   });
@@ -844,6 +730,11 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     meshAABB.copy(geom.boundingBox).applyMatrix4(mesh.matrixWorld);
     if (meshAABB.min.y > 6.5 || meshAABB.max.y < -3.0) {
       continue;
+    }
+
+    // Ativa recepção de sombra apenas nas malhas próximas ao nível da pista onde o carro trafega
+    if (meshAABB.min.y < 1.8 && meshAABB.max.y > -2.5) {
+      mesh.receiveShadow = true;
     }
 
     const idxAttr = geom.index;
@@ -1020,67 +911,6 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
 
   if (minimapRenderer) {
     minimapRenderer.buildRoadPaths(roadSectorMap, wallSegments);
-  }
-
-  // Otimização de GPU (Batching de Malhas por Material):
-  // Agrupa os ~2.455 meshes estáticos do mapa em lotes únicos por material (~80 draw calls),
-  // reduzindo drasticamente o gargalo de CPU/GPU e ativando receiveShadow apenas nas pistas próximas ao solo.
-  try {
-    const matGroups = new Map();
-    for (let m = 0; m < totalMeshes; m++) {
-      const mesh = meshes[m];
-      if (!mesh.geometry || !mesh.material || Array.isArray(mesh.material)) continue;
-
-      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-      meshAABB.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
-      const isGroundLevel = meshAABB.min.y < 1.8 && meshAABB.max.y > -2.5;
-
-      const gClone = mesh.geometry.clone();
-      gClone.applyMatrix4(mesh.matrixWorld);
-
-      // Padroniza atributos para permitir mergeGeometries sem conflitos
-      const keepAttrs = ['position', 'normal', 'uv'];
-      Object.keys(gClone.attributes).forEach((attrName) => {
-        if (!keepAttrs.includes(attrName)) gClone.deleteAttribute(attrName);
-      });
-      if (!gClone.attributes.normal) gClone.computeVertexNormals();
-      if (!gClone.attributes.uv) {
-        const uvArr = new Float32Array(gClone.attributes.position.count * 2);
-        gClone.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
-      }
-
-      const nonIndexed = gClone.index ? gClone.toNonIndexed() : gClone;
-      const groupKey = `${mesh.material.uuid}_${isGroundLevel ? 1 : 0}`;
-      let entry = matGroups.get(groupKey);
-      if (!entry) {
-        entry = { material: mesh.material, isGroundLevel, geoms: [] };
-        matGroups.set(groupKey, entry);
-      }
-      entry.geoms.push(nonIndexed);
-    }
-
-    const batchedGroup = new THREE.Group();
-    matGroups.forEach((entry) => {
-      if (entry.geoms.length === 0) return;
-      const mergedGeom = mergeGeometries(entry.geoms, false);
-      if (mergedGeom) {
-        const batchedMesh = new THREE.Mesh(mergedGeom, entry.material);
-        batchedMesh.castShadow = false;
-        batchedMesh.receiveShadow = entry.isGroundLevel;
-        batchedMesh.matrixAutoUpdate = false;
-        batchedMesh.updateMatrix();
-        batchedGroup.add(batchedMesh);
-      }
-      entry.geoms.forEach((g) => g.dispose());
-    });
-
-    if (batchedGroup.children.length > 0 && cityScene.parent) {
-      const sceneParent = cityScene.parent;
-      sceneParent.remove(cityScene);
-      sceneParent.add(batchedGroup);
-    }
-  } catch (batchErr) {
-    console.warn('Aviso ao otimizar malhas da cidade:', batchErr);
   }
 }
 
@@ -1410,7 +1240,6 @@ let vehicle = null;
 let chassisBody = null;
 let corsaChassisVisual = null;
 let corsaWheelVisuals = [];
-let corsaSteeringWheelVisual = null;
 
 // Luzes funcionais 3D do Corsa (Faróis Halógenos Branco-Quente, Luz de Freio Suave e Luz de Ré)
 // Importante: mantemos .visible = false quando apagadas para que o shader PBR da GPU não avalie luzes de intensidade zero!
@@ -1484,7 +1313,6 @@ async function initSimulation() {
     const splitResult = splitCorsaModelIntoChassisAndWheels(corsaGltf.scene);
     corsaChassisVisual = splitResult.chassisGroup;
     corsaWheelVisuals = splitResult.wheelVisualGroups;
-    corsaSteeringWheelVisual = splitResult.steeringWheelGroup;
 
     setupCarLights(corsaChassisVisual);
 
@@ -1964,12 +1792,6 @@ function syncVisualMeshes() {
     chassisBody.quaternion.w
   );
 
-  // Animação 3D realista do volante sincronizada com o ângulo de esterço
-  if (corsaSteeringWheelVisual) {
-    const steerVisualAngle = state.currentSteer * 3.4;
-    corsaSteeringWheelVisual.setRotationFromAxisAngle(STEERING_AXIS, steerVisualAngle);
-  }
-
   for (let i = 0; i < 4; i++) {
     vehicle.updateWheelTransform(i);
     const wi = vehicle.wheelInfos[i];
@@ -2031,39 +1853,19 @@ function updateCamera(dt) {
     camCurrentLook.y += 0.32 * CAR_SCALE;
     camCurrentLook.addScaledVector(smoothCamHeading, 1.4 * CAR_SCALE);
   } else if (state.cameraMode === 1) {
-    // 1: COCKPIT (VOLANTE FUNCIONAL)
-    // Câmera posicionada exatamente atrás do volante, na linha dos olhos do motorista
-    tempCamOffset.set(-0.333 * CAR_SCALE, 0.54 * CAR_SCALE, 0.14 * CAR_SCALE).applyQuaternion(carQuat);
-    camCurrentPos.copy(carPos).add(tempCamOffset);
-
-    // Vetor de visão olhando para frente através do para-brisa, enquadrando o volante giratório e o asfalto
-    tempCamLookOffset.set(0, -0.14, -1.0).normalize();
-    if (state.isPointerDown || Math.abs(state.orbitYaw) > 0.01 || Math.abs(state.orbitPitch) > 0.01) {
-      tempCamLookOffset.applyAxisAngle(axisX, state.orbitPitch);
-      tempCamLookOffset.applyAxisAngle(axisY, state.orbitYaw);
-    }
-    tempCamLookOffset.applyQuaternion(carQuat);
-    camCurrentLook.copy(camCurrentPos).addScaledVector(tempCamLookOffset, 6.0);
-
-    // Retorno suave da cabeça para frente quando soltar o mouse / toque
-    if (!state.isPointerDown) {
-      state.orbitYaw = THREE.MathUtils.lerp(state.orbitYaw, 0, Math.min(1.0, dt * 6.0));
-      state.orbitPitch = THREE.MathUtils.lerp(state.orbitPitch, 0, Math.min(1.0, dt * 6.0));
-    }
-  } else if (state.cameraMode === 2) {
-    // 2: CAPÔ (MOTOR)
+    // 1: CAPÔ (MOTOR)
     tempCamOffset.set(0, 0.68 * CAR_SCALE, -0.38 * CAR_SCALE).applyQuaternion(carQuat);
     camCurrentPos.copy(carPos).add(tempCamOffset);
     tempCamLookOffset.copy(tempCamForward).applyAxisAngle(axisY, state.orbitYaw);
     camCurrentLook.copy(camCurrentPos).addScaledVector(tempCamLookOffset, 10.0);
-  } else if (state.cameraMode === 3) {
-    // 3: ESCAPAMENTO
+  } else if (state.cameraMode === 2) {
+    // 2: ESCAPAMENTO
     tempCamOffset.set(-0.62 * CAR_SCALE, 0.28 * CAR_SCALE, 3.05 * CAR_SCALE).applyQuaternion(carQuat);
     camCurrentPos.copy(carPos).add(tempCamOffset);
     tempCamLookOffset.set(-0.25 * CAR_SCALE, 0.05 * CAR_SCALE, 0.8 * CAR_SCALE).applyQuaternion(carQuat);
     camCurrentLook.copy(carPos).add(tempCamLookOffset);
   } else {
-    // 4: ÓRBITA LIVRE 3D
+    // 3: ÓRBITA LIVRE 3D
     const radius = 3.9 * CAR_SCALE;
     const angle = state.orbitYaw;
     tempCamOffset.set(
@@ -2310,9 +2112,9 @@ function toggleEngineIgnition() {
 }
 
 function cycleCameraMode() {
-  state.cameraMode = (state.cameraMode + 1) % 5;
-  state.orbitYaw = state.cameraMode === 4 ? Math.PI * 0.35 : 0;
-  state.orbitPitch = state.cameraMode === 1 ? 0 : 0.18;
+  state.cameraMode = (state.cameraMode + 1) % 4;
+  state.orbitYaw = state.cameraMode === 3 ? Math.PI * 0.35 : 0;
+  state.orbitPitch = 0.18;
   const label = document.getElementById('cam-label');
   if (label) label.textContent = CAMERA_MODE_NAMES[state.cameraMode];
 }
