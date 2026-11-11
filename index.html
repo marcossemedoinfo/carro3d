@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Opel Corsa B 1998 — Simulador 3D Realista</title>
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
@@ -44,6 +44,18 @@
         <div class="ctrl-item"><kbd>I</kbd> Ligar / Desligar Motor</div>
         <div class="ctrl-item"><kbd>C</kbd> Câmera / <kbd>R</kbd> Reset</div>
       </div>
+
+      <!-- Botão para ativar modo celular com joystick e pedais na tela -->
+      <button id="mobile-toggle-btn" class="mobile-toggle-btn" type="button">
+        <div class="toggle-left">
+          <span class="btn-icon">📱</span>
+          <div class="toggle-text">
+            <span class="toggle-title">Jogando pelo celular?</span>
+            <span class="toggle-desc">Clique aqui para adicionar o joystick e os botões</span>
+          </div>
+        </div>
+        <span id="mobile-badge" class="toggle-badge">TOQUE: DESATIVADO</span>
+      </button>
 
       <button id="start-btn" disabled>
         <span class="key-icon">&#9889;</span> DAR PARTIDA NO CORSA
@@ -101,6 +113,9 @@
       <button id="btn-reset" class="hud-btn" title="Atalho: Tecla R">
         REPOSICIONAR <kbd>R</kbd>
       </button>
+      <button id="btn-toggle-touch" class="hud-btn" title="Alternar Joystick e Controles na Tela">
+        📱 TOUCH: <strong id="touch-hud-label">OFF</strong>
+      </button>
     </div>
   </div>
 
@@ -143,6 +158,68 @@
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis</div>
     <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>I</kbd> Ignição</div>
     <div><kbd>C</kbd> Câmera (Perseguição / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
+  </div>
+
+  <!-- Controles de Toque para Celular (Joystick Analógico + Pedais + Ações Rápidas) -->
+  <div id="mobile-controls" class="hud-hidden">
+    <!-- Barra Superior de Ações Rápidas Mobile -->
+    <div class="mobile-top-bar">
+      <button id="mbtn-ignition" class="m-action-btn active" type="button" title="Ligar / Desligar Motor">
+        <span class="m-icon">⚡</span>
+        <span id="m-ignition-txt" class="m-txt">MOTOR: ON</span>
+      </button>
+      <button id="mbtn-lights" class="m-action-btn" type="button" title="Ligar / Desligar Faróis">
+        <span class="m-icon">💡</span>
+        <span id="m-lights-txt" class="m-txt">FARÓIS: OFF</span>
+      </button>
+      <button id="mbtn-transmission" class="m-action-btn" type="button" title="Câmbio Auto / Manual">
+        <span class="m-icon">⚙️</span>
+        <span id="m-trans-txt" class="m-txt">AUTO</span>
+      </button>
+      <div id="m-gear-cluster" class="m-gear-cluster" style="display: none;">
+        <button id="mbtn-gear-down" class="m-action-btn m-gear-btn" type="button" title="Reduzir Marcha">-</button>
+        <button id="mbtn-gear-up" class="m-action-btn m-gear-btn" type="button" title="Aumentar Marcha">+</button>
+      </div>
+      <button id="mbtn-camera" class="m-action-btn m-icon-only" type="button" title="Mudar Câmera">
+        <span class="m-icon">🎥</span>
+      </button>
+      <button id="mbtn-reset" class="m-action-btn m-icon-only" type="button" title="Reposicionar Carro">
+        <span class="m-icon">🔄</span>
+      </button>
+    </div>
+
+    <!-- Joystick Analógico Virtual para o Volante (Lado Esquerdo) -->
+    <div id="virtual-joystick-zone">
+      <div id="joystick-base">
+        <div class="joystick-arrows">
+          <span class="j-arr-left">◀</span>
+          <span class="j-center-icon">🛞</span>
+          <span class="j-arr-right">▶</span>
+        </div>
+        <div id="joystick-stick">
+          <div class="stick-knob"></div>
+        </div>
+      </div>
+      <div class="joystick-label">VOLANTE ANALÓGICO</div>
+    </div>
+
+    <!-- Cluster de Pedais & Drift (Lado Direito) -->
+    <div class="mobile-pedals-cluster">
+      <button id="mbtn-handbrake" class="m-pedal-btn m-handbrake-btn" type="button">
+        <span class="pedal-icon">💨</span>
+        <span class="pedal-label">DRIFT / MÃO</span>
+      </button>
+      <div class="pedals-row">
+        <button id="mbtn-brake" class="m-pedal-btn m-brake-btn" type="button">
+          <span class="pedal-icon">🛑</span>
+          <span class="pedal-label">FREIO / RÉ</span>
+        </button>
+        <button id="mbtn-throttle" class="m-pedal-btn m-throttle-btn" type="button">
+          <span class="pedal-icon">⚡</span>
+          <span class="pedal-label">ACELERAR</span>
+        </button>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="game.js"></script>

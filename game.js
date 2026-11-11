@@ -113,6 +113,13 @@ const state = {
   orbitYaw: 0,
   orbitPitch: 0.18,
   isPointerDown: false,
+  mobileMode: false,
+  touchInput: {
+    steer: 0,
+    throttle: 0,
+    brake: 0,
+    handbrake: 0
+  },
   wheelSkids: [0, 0, 0, 0],
   wheelCompression: [0.5, 0.5, 0.5, 0.5]
 };
@@ -1164,7 +1171,16 @@ const tempChassisRight = new THREE.Vector3();
 function updateVehiclePhysicsAndEffects(dt) {
   if (!vehicle || !chassisBody) return;
 
-  if (keys.w || keys.s || keys.a || keys.d || keys.space) {
+  const inputForward = keys.w || state.touchInput.throttle > 0;
+  const inputBackward = keys.s || state.touchInput.brake > 0;
+  const inputHandbrake = keys.space || state.touchInput.handbrake > 0;
+  const touchThrottleVal = state.touchInput.throttle;
+  const touchBrakeVal = state.touchInput.brake;
+
+  if (
+    keys.w || keys.s || keys.a || keys.d || keys.space ||
+    inputForward || inputBackward || inputHandbrake || Math.abs(state.touchInput.steer) > 0.05
+  ) {
     chassisBody.wakeUp();
   }
 
@@ -1188,48 +1204,51 @@ function updateVehiclePhysicsAndEffects(dt) {
   let rawBrake = 0.0;
 
   if (state.transmission === 'AUTO') {
-    if (keys.w && !keys.s) {
+    if (inputForward && !inputBackward) {
       if (state.gear === -1) {
         if (state.forwardSpeedMs < -0.30) {
           rawThrottle = 0.0;
           rawBrake = 1.0;
         } else {
           state.gear = 1;
-          rawThrottle = 1.0;
+          rawThrottle = Math.max(keys.w ? 1.0 : 0.0, touchThrottleVal);
           rawBrake = 0.0;
         }
       } else {
         if (state.gear === 0) state.gear = 1;
-        rawThrottle = 1.0;
+        rawThrottle = Math.max(keys.w ? 1.0 : 0.0, touchThrottleVal);
         rawBrake = 0.0;
       }
-    } else if (keys.s && !keys.w) {
+    } else if (inputBackward && !inputForward) {
       if (state.forwardSpeedMs > 0.30) {
         rawThrottle = 0.0;
-        rawBrake = 1.0;
+        rawBrake = Math.max(keys.s ? 1.0 : 0.0, touchBrakeVal);
       } else {
         state.gear = -1;
-        rawThrottle = 0.85;
+        rawThrottle = Math.max(keys.s ? 0.85 : 0.0, touchBrakeVal * 0.85);
         rawBrake = 0.0;
       }
-    } else if (keys.w && keys.s) {
+    } else if (inputForward && inputBackward) {
       rawThrottle = 0.0;
       rawBrake = 1.0;
     }
   } else {
-    rawThrottle = keys.w ? 1.0 : 0.0;
-    rawBrake = keys.s ? 1.0 : 0.0;
-    if (state.gear > 0 && state.forwardSpeedMs < -0.30 && keys.w) {
+    rawThrottle = Math.max(keys.w ? 1.0 : 0.0, touchThrottleVal);
+    rawBrake = Math.max(keys.s ? 1.0 : 0.0, touchBrakeVal);
+    if (state.gear > 0 && state.forwardSpeedMs < -0.30 && inputForward) {
       rawBrake = 0.5;
     }
   }
 
   state.throttleInput = THREE.MathUtils.lerp(state.throttleInput, rawThrottle, Math.min(1, dt * 10));
   state.brakeInput = THREE.MathUtils.lerp(state.brakeInput, rawBrake, Math.min(1, dt * 16));
-  state.handbrakeInput = keys.space ? 1.0 : 0.0;
+  state.handbrakeInput = inputHandbrake ? 1.0 : 0.0;
 
-  // Direção assistida progressiva
-  const targetSteer = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
+  // Direção assistida progressiva (Teclado A/D ou Joystick Analógico Virtual)
+  let targetSteer = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
+  if (Math.abs(state.touchInput.steer) > 0.01) {
+    targetSteer = state.touchInput.steer;
+  }
   const speedFactor = THREE.MathUtils.clamp(1.0 - (state.speedKmh / 180) * 0.55, 0.35, 1.0);
   const maxSteerNow = CORSA_SPECS.maxSteerAngle * speedFactor;
   state.currentSteer = THREE.MathUtils.lerp(state.currentSteer, targetSteer * maxSteerNow, Math.min(1, dt * 8.0));
@@ -1721,6 +1740,35 @@ function updateHUD() {
   } else {
     banner.classList.add('hud-hidden');
   }
+
+  // Atualiza estados dos botões touch para celular
+  const mIgnitionTxt = document.getElementById('m-ignition-txt');
+  const mBtnIgnition = document.getElementById('mbtn-ignition');
+  if (mIgnitionTxt && mBtnIgnition) {
+    if (state.startingEngine) {
+      mIgnitionTxt.textContent = 'PARTIDA...';
+      mBtnIgnition.classList.remove('active');
+    } else {
+      mIgnitionTxt.textContent = state.engineOn ? 'MOTOR: ON' : 'MOTOR: OFF';
+      mBtnIgnition.classList.toggle('active', state.engineOn);
+    }
+  }
+
+  const mLightsTxt = document.getElementById('m-lights-txt');
+  const mBtnLights = document.getElementById('mbtn-lights');
+  if (mLightsTxt && mBtnLights) {
+    mLightsTxt.textContent = state.headlightsOn ? 'FARÓIS: ON' : 'FARÓIS: OFF';
+    mBtnLights.classList.toggle('active', state.headlightsOn);
+  }
+
+  const mTransTxt = document.getElementById('m-trans-txt');
+  const mGearCluster = document.getElementById('m-gear-cluster');
+  if (mTransTxt) {
+    mTransTxt.textContent = state.transmission;
+  }
+  if (mGearCluster) {
+    mGearCluster.style.display = state.transmission === 'MANUAL' ? 'flex' : 'none';
+  }
 }
 
 // ============================================================================
@@ -1833,6 +1881,263 @@ window.addEventListener('pointermove', (e) => {
   state.orbitPitch = THREE.MathUtils.clamp(state.orbitPitch + e.movementY * 0.0045, -0.15, 0.75);
 });
 
+// ============================================================================
+// 12. CONTROLES PARA CELULAR (JOYSTICK ANALÓGICO, PEDAIS E AÇÕES TOUCH)
+// ============================================================================
+function setMobileMode(enabled) {
+  state.mobileMode = enabled;
+  const toggleBtn = document.getElementById('mobile-toggle-btn');
+  const badge = document.getElementById('mobile-badge');
+  const touchHudLabel = document.getElementById('touch-hud-label');
+  const btnToggleTouch = document.getElementById('btn-toggle-touch');
+  const mobileControls = document.getElementById('mobile-controls');
+  const controlsHelper = document.getElementById('controls-helper');
+
+  if (toggleBtn) {
+    toggleBtn.classList.toggle('is-active', enabled);
+  }
+  if (badge) {
+    badge.textContent = enabled ? 'TOQUE: ATIVADO ✅' : 'TOQUE: DESATIVADO';
+    badge.classList.toggle('active', enabled);
+  }
+  if (touchHudLabel) {
+    touchHudLabel.textContent = enabled ? 'ON' : 'OFF';
+  }
+  if (btnToggleTouch) {
+    btnToggleTouch.classList.toggle('active-mode', enabled);
+  }
+
+  if (state.started) {
+    if (enabled) {
+      mobileControls?.classList.remove('hud-hidden');
+      controlsHelper?.classList.add('hud-hidden');
+      document.body.classList.add('mobile-active');
+    } else {
+      mobileControls?.classList.add('hud-hidden');
+      controlsHelper?.classList.remove('hud-hidden');
+      document.body.classList.remove('mobile-active');
+    }
+  }
+}
+
+function setupMobileControls() {
+  const mobileToggleBtn = document.getElementById('mobile-toggle-btn');
+  if (mobileToggleBtn) {
+    mobileToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setMobileMode(!state.mobileMode);
+    });
+  }
+
+  const btnToggleTouch = document.getElementById('btn-toggle-touch');
+  if (btnToggleTouch) {
+    btnToggleTouch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setMobileMode(!state.mobileMode);
+    });
+  }
+
+  // --- JOYSTICK ANALÓGICO VIRTUAL (VOLANTE PROGRESSIVO) ---
+  const joystickZone = document.getElementById('virtual-joystick-zone');
+  const joystickBase = document.getElementById('joystick-base');
+  const joystickStick = document.getElementById('joystick-stick');
+  let joystickTouchId = null;
+  let joystickCenter = { x: 0, y: 0 };
+  const joystickMaxRadius = 45;
+
+  function updateJoystickPosition(touchX, touchY) {
+    let dx = touchX - joystickCenter.x;
+    let dy = touchY - joystickCenter.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > joystickMaxRadius) {
+      const angle = Math.atan2(dy, dx);
+      dx = Math.cos(angle) * joystickMaxRadius;
+      dy = Math.sin(angle) * joystickMaxRadius;
+    }
+
+    if (joystickStick) {
+      joystickStick.style.transform = `translate(${dx}px, ${dy}px)`;
+    }
+
+    // Normalização de esterço:
+    // dx < 0 (esquerda) => esterço positivo (virar para a esquerda)
+    // dx > 0 (direita)  => esterço negativo (virar para a direita)
+    state.touchInput.steer = -(dx / joystickMaxRadius);
+  }
+
+  function resetJoystick() {
+    joystickTouchId = null;
+    state.touchInput.steer = 0;
+    if (joystickStick) {
+      joystickStick.style.transform = 'translate(0px, 0px)';
+    }
+  }
+
+  if (joystickZone && joystickBase) {
+    joystickZone.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (joystickTouchId !== null) return;
+      const touch = e.changedTouches[0];
+      joystickTouchId = touch.identifier;
+      const rect = joystickBase.getBoundingClientRect();
+      joystickCenter = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+      updateJoystickPosition(touch.clientX, touch.clientY);
+    }, { passive: false });
+
+    window.addEventListener('touchmove', (e) => {
+      if (joystickTouchId === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (touch.identifier === joystickTouchId) {
+          e.preventDefault();
+          updateJoystickPosition(touch.clientX, touch.clientY);
+          break;
+        }
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchend', (e) => {
+      if (joystickTouchId === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === joystickTouchId) {
+          e.preventDefault();
+          resetJoystick();
+          break;
+        }
+      }
+    });
+
+    window.addEventListener('touchcancel', (e) => {
+      if (joystickTouchId === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === joystickTouchId) {
+          resetJoystick();
+          break;
+        }
+      }
+    });
+
+    // Suporte também a arrasto com Mouse no PC (para testar o volante no computador)
+    let isMouseDraggingJoystick = false;
+    joystickZone.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      isMouseDraggingJoystick = true;
+      const rect = joystickBase.getBoundingClientRect();
+      joystickCenter = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+      updateJoystickPosition(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isMouseDraggingJoystick) return;
+      updateJoystickPosition(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isMouseDraggingJoystick) {
+        isMouseDraggingJoystick = false;
+        resetJoystick();
+      }
+    });
+  }
+
+  // --- BOTÕES DE PEDAIS (ACELERADOR, FREIO, FREIO DE MÃO / DRIFT) ---
+  function bindHoldButton(elem, onDown, onUp) {
+    if (!elem) return;
+    const start = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      elem.classList.add('pressed');
+      onDown();
+    };
+    const end = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      elem.classList.remove('pressed');
+      onUp();
+    };
+
+    elem.addEventListener('touchstart', start, { passive: false });
+    elem.addEventListener('touchend', end, { passive: false });
+    elem.addEventListener('touchcancel', end, { passive: false });
+
+    elem.addEventListener('mousedown', start);
+    elem.addEventListener('mouseup', end);
+    elem.addEventListener('mouseleave', end);
+  }
+
+  const btnThrottle = document.getElementById('mbtn-throttle');
+  bindHoldButton(btnThrottle, () => {
+    state.touchInput.throttle = 1.0;
+  }, () => {
+    state.touchInput.throttle = 0.0;
+  });
+
+  const btnBrake = document.getElementById('mbtn-brake');
+  bindHoldButton(btnBrake, () => {
+    state.touchInput.brake = 1.0;
+  }, () => {
+    state.touchInput.brake = 0.0;
+  });
+
+  const btnHandbrake = document.getElementById('mbtn-handbrake');
+  bindHoldButton(btnHandbrake, () => {
+    state.touchInput.handbrake = 1.0;
+  }, () => {
+    state.touchInput.handbrake = 0.0;
+  });
+
+  // --- BOTÕES DE AÇÃO RÁPIDA (IGNIÇÃO, LUZES, CÂMBIO, CÂMERA, RESET) ---
+  document.getElementById('mbtn-ignition')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleEngineIgnition();
+  });
+
+  document.getElementById('mbtn-lights')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleHeadlights();
+  });
+
+  document.getElementById('mbtn-transmission')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleTransmissionMode();
+  });
+
+  document.getElementById('mbtn-gear-up')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    changeGear(state.gear + 1);
+  });
+
+  document.getElementById('mbtn-gear-down')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    changeGear(state.gear - 1);
+  });
+
+  document.getElementById('mbtn-camera')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    cycleCameraMode();
+  });
+
+  document.getElementById('mbtn-reset')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    resetCarToSpawn(state.spawnIdx);
+  });
+
+  // Auto-detecção inteligente de tela de toque (se for celular/tablet, pré-ativa de início)
+  const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (window.innerWidth <= 820);
+  if (isTouchDevice) {
+    setMobileMode(true);
+  } else {
+    setMobileMode(false);
+  }
+}
+
 startBtn.addEventListener('click', () => {
   if (!state.loaded || state.started) return;
   state.started = true;
@@ -1840,7 +2145,8 @@ startBtn.addEventListener('click', () => {
   document.getElementById('loading-overlay').classList.add('hud-hidden');
   document.getElementById('top-hud').classList.remove('hud-hidden');
   document.getElementById('dashboard-hud').classList.remove('hud-hidden');
-  document.getElementById('controls-helper').classList.remove('hud-hidden');
+
+  setMobileMode(state.mobileMode);
 
   carAudio.startContinuousLoops();
   toggleEngineIgnition();
@@ -1860,7 +2166,7 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================================
-// 12. LOOP DE SIMULAÇÃO EM TEMPO REAL (60 FPS CRAVADOS E FLUIDOS)
+// 13. LOOP DE SIMULAÇÃO EM TEMPO REAL (60 FPS CRAVADOS E FLUIDOS)
 // ============================================================================
 let lastTime = performance.now();
 
@@ -1887,4 +2193,5 @@ function animate(now) {
 }
 
 initSimulation();
+setupMobileControls();
 requestAnimationFrame(animate);

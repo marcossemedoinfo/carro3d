@@ -504,3 +504,473 @@ kbd {
   transition: opacity 0.4s ease;
 }
 
+/* ==========================================================================
+   MOBILE CONTROLS & RESPONSIVE LAYOUT
+   ========================================================================== */
+
+/* Toggle Button inside the Loading Overlay Card */
+.mobile-toggle-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  margin-bottom: 16px;
+  background: rgba(30, 41, 59, 0.75);
+  border: 1.5px solid rgba(56, 189, 248, 0.35);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  color: #f1f5f9;
+  text-align: left;
+}
+
+.mobile-toggle-btn:hover {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.7);
+}
+
+.mobile-toggle-btn.is-active {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.3);
+}
+
+.toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toggle-left .btn-icon {
+  font-size: 24px;
+}
+
+.toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toggle-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.toggle-desc {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.toggle-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 5px 12px;
+  border-radius: 99px;
+  background: rgba(100, 116, 139, 0.25);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  transition: all 0.2s ease;
+}
+
+.mobile-toggle-btn.is-active .toggle-badge {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+  border-color: #22c55e;
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.3);
+}
+
+/* Mobile Controls Overlay */
+#mobile-controls {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  touch-action: none;
+  transition: opacity 0.3s ease;
+}
+
+/* Mobile Top Quick Action Bar */
+.mobile-top-bar {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px);
+  padding: 6px 12px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  max-width: 96vw;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.mobile-top-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.m-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e2e8f0;
+  padding: 6px 11px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  touch-action: manipulation;
+  transition: all 0.15s ease;
+}
+
+.m-action-btn:active {
+  transform: scale(0.92);
+}
+
+.m-action-btn.active {
+  background: rgba(34, 197, 94, 0.25);
+  border-color: #22c55e;
+  color: #4ade80;
+}
+
+.m-action-btn.m-icon-only {
+  padding: 6px 11px;
+  font-size: 14px;
+}
+
+.m-gear-cluster {
+  display: flex;
+  gap: 4px;
+}
+
+.m-gear-btn {
+  padding: 4px 10px;
+  font-size: 14px;
+  font-weight: 900;
+  background: rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+}
+
+/* Analog Virtual Joystick (Left) */
+#virtual-joystick-zone {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  width: 140px;
+  height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 50;
+}
+
+#joystick-base {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(circle at center, rgba(30, 41, 59, 0.75) 0%, rgba(15, 23, 42, 0.92) 100%);
+  backdrop-filter: blur(10px);
+  border: 2px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.2), inset 0 0 15px rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.joystick-arrows {
+  position: absolute;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+  color: rgba(56, 189, 248, 0.45);
+  font-size: 14px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.j-center-icon {
+  font-size: 18px;
+  opacity: 0.35;
+}
+
+#joystick-stick {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #38bdf8 0%, #0284c7 65%, #0369a1 100%);
+  border: 2px solid #bae6fd;
+  box-shadow: 0 4px 15px rgba(2, 132, 199, 0.6), inset 0 2px 6px rgba(255, 255, 255, 0.6);
+  cursor: grab;
+  touch-action: none;
+  transition: transform 0.05s linear;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stick-knob {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.joystick-label {
+  margin-top: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #94a3b8;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+}
+
+/* Mobile Pedals Cluster (Right) */
+.mobile-pedals-cluster {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.m-pedal-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
+  font-family: inherit;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.m-pedal-btn:active,
+.m-pedal-btn.pressed {
+  transform: scale(0.92) translateY(2px);
+  filter: brightness(1.2);
+}
+
+/* Drift / Handbrake button */
+.m-handbrake-btn {
+  width: 140px;
+  height: 46px;
+  border-radius: 99px;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  border: 2px solid #fde68a;
+  color: #1e1b4b;
+  flex-direction: row;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4);
+}
+
+.m-handbrake-btn:active,
+.m-handbrake-btn.pressed {
+  box-shadow: 0 0 24px rgba(245, 158, 11, 0.8);
+}
+
+.m-handbrake-btn .pedal-icon {
+  font-size: 18px;
+}
+
+/* Pedals Row: Brake & Throttle */
+.pedals-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+}
+
+/* Brake Pedal */
+.m-brake-btn {
+  width: 78px;
+  height: 94px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
+  border: 2px solid #fecaca;
+  color: #ffffff;
+  padding: 10px 4px;
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.45);
+}
+
+.m-brake-btn:active,
+.m-brake-btn.pressed {
+  box-shadow: 0 0 28px rgba(239, 68, 68, 0.85);
+}
+
+.m-brake-btn .pedal-icon {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.m-brake-btn .pedal-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+}
+
+/* Throttle Pedal (Larger) */
+.m-throttle-btn {
+  width: 86px;
+  height: 114px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #22c55e 0%, #15803d 100%);
+  border: 2px solid #bbf7d0;
+  color: #ffffff;
+  padding: 10px 4px;
+  box-shadow: 0 8px 26px rgba(34, 197, 94, 0.5);
+}
+
+.m-throttle-btn:active,
+.m-throttle-btn.pressed {
+  box-shadow: 0 0 30px rgba(34, 197, 94, 0.9);
+}
+
+.m-throttle-btn .pedal-icon {
+  font-size: 28px;
+  margin-bottom: 4px;
+}
+
+.m-throttle-btn .pedal-label {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 1px;
+}
+
+/* Layout adjustments when mobile mode is active */
+body.mobile-active #controls-helper {
+  display: none !important;
+}
+
+body.mobile-active #top-hud .telemetry-panel {
+  display: none;
+}
+
+/* Position dashboard HUD above pedals when mobile controls are active */
+body.mobile-active #dashboard-hud {
+  bottom: 165px;
+  right: 20px;
+  transform: scale(0.78);
+  transform-origin: bottom right;
+}
+
+body.mobile-active #dashboard-hud .pedals-cluster {
+  display: none;
+}
+
+/* Media Queries for Smaller Screens / Phones */
+@media (max-width: 768px) {
+  .loader-card {
+    padding: 24px 20px;
+  }
+
+  .loader-card h1 {
+    font-size: 26px;
+  }
+
+  .controls-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  #top-hud {
+    top: 10px;
+    left: 10px;
+    right: 10px;
+  }
+
+  #top-hud .telemetry-panel {
+    display: none;
+  }
+
+  #top-hud .actions-panel {
+    gap: 4px;
+  }
+
+  .hud-btn {
+    padding: 5px 8px;
+    font-size: 10px;
+  }
+
+  #dashboard-hud {
+    transform: scale(0.72);
+    transform-origin: bottom right;
+  }
+
+  body.mobile-active #dashboard-hud {
+    bottom: 155px;
+    right: 14px;
+    transform: scale(0.68);
+  }
+
+  #virtual-joystick-zone {
+    bottom: 16px;
+    left: 14px;
+    width: 120px;
+    height: 120px;
+  }
+
+  #joystick-base {
+    width: 105px;
+    height: 105px;
+  }
+
+  #joystick-stick {
+    width: 48px;
+    height: 48px;
+  }
+
+  .mobile-pedals-cluster {
+    bottom: 16px;
+    right: 14px;
+    gap: 8px;
+  }
+
+  .m-handbrake-btn {
+    width: 125px;
+    height: 42px;
+    font-size: 11px;
+  }
+
+  .m-brake-btn {
+    width: 66px;
+    height: 84px;
+  }
+
+  .m-throttle-btn {
+    width: 74px;
+    height: 98px;
+  }
+}
+
