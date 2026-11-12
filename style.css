@@ -322,6 +322,31 @@ kbd {
   color: #f59e0b;
 }
 
+.hud-btn.tod-day strong {
+  color: #38bdf8;
+}
+
+.hud-btn.tod-sunset {
+  border-color: rgba(249, 115, 22, 0.55);
+}
+.hud-btn.tod-sunset strong {
+  color: #fb923c;
+}
+
+.hud-btn.tod-night {
+  border-color: rgba(168, 85, 247, 0.55);
+}
+.hud-btn.tod-night strong {
+  color: #c084fc;
+}
+
+.hud-btn.tod-auto {
+  border-color: rgba(34, 197, 94, 0.55);
+}
+.hud-btn.tod-auto strong {
+  color: #4ade80;
+}
+
 .hud-btn.turbo-full,
 .m-action-btn.turbo-full {
   border-color: #ef4444 !important;

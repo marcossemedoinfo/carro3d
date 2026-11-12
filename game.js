@@ -93,6 +93,8 @@ const state = {
   started: false,
   engineOn: false,
   startingEngine: false,
+  timeOfDay: 'day',       // 'day', 'sunset', 'night', 'auto'
+  timeHour: 12.0,
   headlightsOn: false,    // Faróis dianteiros e lanternas traseiras (Tecla L ou botão HUD)
   turboInstalled: false,  // Kit Turbo com espirro de alívio nas trocas de marcha e torque extra
   turboBoost: 0.0,        // Pressão atual da turbina: 0.0 (sem pressão) a 1.0 (turbo cheio / 1.5 bar)
@@ -640,6 +642,44 @@ function triggerTurboBlowOff() {
   state.turboBoost = 0.05;
 }
 
+function createCarContactShadow() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+
+  // Gradiente suave simulando a oclusão ambiental (AO) de contato sob o assoalho
+  const grad = ctx.createRadialGradient(128, 128, 25, 128, 128, 122);
+  grad.addColorStop(0.00, 'rgba(0, 0, 0, 0.88)');
+  grad.addColorStop(0.45, 'rgba(0, 0, 0, 0.62)');
+  grad.addColorStop(0.80, 'rgba(0, 0, 0, 0.22)');
+  grad.addColorStop(1.00, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = grad;
+  if (ctx.roundRect) {
+    ctx.beginPath();
+    ctx.roundRect(16, 26, 224, 204, 38);
+    ctx.fill();
+  } else {
+    ctx.fillRect(16, 26, 224, 204);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const geom = new THREE.PlaneGeometry(1.75 * CAR_SCALE, 3.85 * CAR_SCALE);
+  const mat = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 0.65,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(0, -0.54 * CAR_SCALE, 0.08 * CAR_SCALE);
+  return mesh;
+}
+
 function splitCorsaModelIntoChassisAndWheels(gltfScene) {
   const chassisGroup = new THREE.Group();
   const wheelVisualGroups = [
@@ -843,6 +883,9 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
   chassisGroup.children.forEach((c) => {
     c.position.y -= CHASSIS_COM_OFFSET_Y;
   });
+
+  // Sombra de contato suave sob o assoalho do Corsa (elimina o efeito de carro flutuando)
+  chassisGroup.add(createCarContactShadow());
 
   return {
     chassisGroup,
@@ -1349,21 +1392,474 @@ const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerH
 const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x334155, 1.0);
 scene.add(hemiLight);
 
-const sunLight = new THREE.DirectionalLight(0xfffbeb, 2.0);
+// Luz direcional do Sol / Lua com sombras suaves em alta definição (2048x2048) e normalBias anti-acne
+const sunLight = new THREE.DirectionalLight(0xfff8e7, 2.2);
 sunLight.position.set(60, 95, 45);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.width = 1024;
-sunLight.shadow.mapSize.height = 1024;
-sunLight.shadow.camera.near = 10;
-sunLight.shadow.camera.far = 160;
-const d = 16;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 5;
+sunLight.shadow.camera.far = 250;
+const d = 22;
 sunLight.shadow.camera.left = -d;
 sunLight.shadow.camera.right = d;
 sunLight.shadow.camera.top = d;
 sunLight.shadow.camera.bottom = -d;
-sunLight.shadow.bias = -0.0005;
+sunLight.shadow.bias = -0.0003;
+sunLight.shadow.normalBias = 0.02; // Elimina moiré e acne de sombra na lataria curva do veículo
 scene.add(sunLight);
 scene.add(sunLight.target);
+
+// ============================================================================
+// SISTEMA DINÂMICO DE ILUMINAÇÃO, REFLEXOS PBR E CICLO DIA/NOITE (ENVIRONMENT)
+// ============================================================================
+class EnvironmentTimeSystem {
+  constructor(scene, renderer, sunLight, hemiLight) {
+    this.scene = scene;
+    this.renderer = renderer;
+    this.sunLight = sunLight;
+    this.hemiLight = hemiLight;
+
+    this.mode = 'day'; // 'day', 'sunset', 'night', 'auto'
+    this.hour = 12.0;
+    this.lastPmremHour = -999;
+    this.prevRenderTarget = null;
+
+    // PMREM Generator para reflexos PBR em tempo real na lataria, vidros e cromados
+    this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
+    this.pmremGenerator.compileEquirectangularShader();
+
+    // Canvas equirretangular de alta fidelidade para o domo celeste (512x256)
+    this.skyCanvas = document.createElement('canvas');
+    this.skyCanvas.width = 512;
+    this.skyCanvas.height = 256;
+    this.skyCtx = this.skyCanvas.getContext('2d');
+
+    this.skyTexture = new THREE.CanvasTexture(this.skyCanvas);
+    this.skyTexture.mapping = THREE.EquirectangularReflectionMapping;
+
+    // Grupo de corpos celestes 3D (Sol com corona, Lua brilhante e campo estelar)
+    this.celestialGroup = new THREE.Group();
+    this.scene.add(this.celestialGroup);
+
+    this.sunSprite = this.createSunSprite();
+    this.celestialGroup.add(this.sunSprite);
+
+    this.moonSprite = this.createMoonSprite();
+    this.celestialGroup.add(this.moonSprite);
+
+    this.starfield = this.createStarfield();
+    this.celestialGroup.add(this.starfield);
+
+    this.sunDir = new THREE.Vector3();
+    this.moonDir = new THREE.Vector3();
+    this.activeLightDir = new THREE.Vector3();
+
+    this.applyPreset(this.mode, true);
+  }
+
+  createSunSprite() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+
+    // Gradiente esférico do Sol: núcleo branco incandescente, corona dourada e halo térmico suave
+    const grad = ctx.createRadialGradient(128, 128, 14, 128, 128, 124);
+    grad.addColorStop(0.00, 'rgba(255, 255, 255, 1.0)');
+    grad.addColorStop(0.16, 'rgba(255, 252, 220, 0.95)');
+    grad.addColorStop(0.35, 'rgba(255, 205, 90, 0.75)');
+    grad.addColorStop(0.65, 'rgba(255, 140, 40, 0.30)');
+    grad.addColorStop(1.00, 'rgba(255, 100, 20, 0.0)');
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 256, 256);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({
+      map: texture,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true
+    });
+
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(72, 72, 1);
+    return sprite;
+  }
+
+  createMoonSprite() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+
+    // Disco lunar com crateras sutis e aura azulada fria
+    const halo = ctx.createRadialGradient(128, 128, 28, 128, 128, 124);
+    halo.addColorStop(0.0, 'rgba(215, 235, 255, 0.85)');
+    halo.addColorStop(0.32, 'rgba(165, 205, 255, 0.45)');
+    halo.addColorStop(0.70, 'rgba(120, 160, 255, 0.15)');
+    halo.addColorStop(1.0, 'rgba(90, 130, 240, 0.0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, 256, 256);
+
+    const disc = ctx.createRadialGradient(128, 128, 0, 128, 128, 28);
+    disc.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+    disc.addColorStop(0.75, 'rgba(235, 245, 255, 0.95)');
+    disc.addColorStop(1.0, 'rgba(195, 220, 255, 0.85)');
+    ctx.fillStyle = disc;
+    ctx.beginPath();
+    ctx.arc(128, 128, 28, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(150, 175, 200, 0.35)';
+    ctx.beginPath();
+    ctx.arc(120, 122, 9, 0, Math.PI * 2);
+    ctx.arc(135, 132, 12, 0, Math.PI * 2);
+    ctx.arc(122, 138, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({
+      map: texture,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true
+    });
+
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(54, 54, 1);
+    return sprite;
+  }
+
+  createStarfield() {
+    const starCount = 800;
+    const positions = new Float32Array(starCount * 3);
+    const colors = new Float32Array(starCount * 3);
+
+    const cWhite = new THREE.Color(0xffffff);
+    const cBlue = new THREE.Color(0xc7d2fe);
+    const cAmber = new THREE.Color(0xfef3c7);
+
+    for (let i = 0; i < starCount; i++) {
+      const u = Math.random();
+      const v = Math.random();
+      const theta = u * 2.0 * Math.PI;
+      const phi = Math.acos(1.0 - v * 0.96);
+      const r = 450.0 + Math.random() * 20.0;
+
+      positions[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.cos(phi);
+      positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+
+      const pal = i % 5 === 0 ? cAmber : i % 3 === 0 ? cBlue : cWhite;
+      const lum = 0.70 + Math.random() * 0.30;
+      colors[i * 3]     = pal.r * lum;
+      colors[i * 3 + 1] = pal.g * lum;
+      colors[i * 3 + 2] = pal.b * lum;
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    const mat = new THREE.PointsMaterial({
+      size: 2.2,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.0,
+      depthWrite: false,
+      sizeAttenuation: false
+    });
+
+    return new THREE.Points(geom, mat);
+  }
+
+  calcCelestialVectors(hour) {
+    const progress = ((hour - 6.0) / 24.0) * Math.PI * 2.0;
+    const elev = Math.sin(progress);
+    const cosP = Math.cos(progress);
+
+    const sx = -cosP * 0.85;
+    const sy = Math.max(-0.25, elev);
+    const sz = 0.40;
+    this.sunDir.set(sx, sy, sz).normalize();
+
+    const mx = cosP * 0.85;
+    const my = Math.max(-0.25, -elev);
+    const mz = -0.40;
+    this.moonDir.set(mx, my, mz).normalize();
+
+    const isDaytime = elev >= -0.05;
+    if (isDaytime) {
+      this.activeLightDir.copy(this.sunDir);
+      if (this.activeLightDir.y < 0.08) this.activeLightDir.y = 0.08;
+      this.activeLightDir.normalize();
+    } else {
+      this.activeLightDir.copy(this.moonDir);
+      if (this.activeLightDir.y < 0.12) this.activeLightDir.y = 0.12;
+      this.activeLightDir.normalize();
+    }
+
+    return { elev, isDaytime };
+  }
+
+  renderSkyEquirectangular(hour, elev) {
+    const ctx = this.skyCtx;
+    const w = 512;
+    const h = 256;
+
+    let colZenith, colMid, colHorizon, colGround, fogHex, fogDensity, expVal;
+    let sunColorHex, sunInt, hemiSkyHex, hemiGroundHex, hemiInt;
+    let starsAlpha = 0.0;
+
+    if (hour >= 8.5 && hour <= 16.0) {
+      // --- DIA (12:00) ---
+      colZenith = '#1d4ed8';
+      colMid = '#60a5fa';
+      colHorizon = '#bfdbfe';
+      colGround = '#334155';
+      fogHex = 0x93c5fd;
+      fogDensity = 0.0016;
+      expVal = 1.10;
+
+      sunColorHex = 0xfff8e7;
+      sunInt = 2.2;
+      hemiSkyHex = 0x93c5fd;
+      hemiGroundHex = 0x334155;
+      hemiInt = 0.95;
+      starsAlpha = 0.0;
+    } else if (hour > 16.0 && hour < 19.5) {
+      // --- PÔR DO SOL / GOLDEN HOUR (17:45) ---
+      const t = (hour - 16.0) / 3.5;
+      colZenith = '#312e81';
+      colMid = '#9d174d';
+      colHorizon = '#ea580c';
+      colGround = '#1e1b4b';
+      fogHex = 0xd97706;
+      fogDensity = 0.0022;
+      expVal = 1.18;
+
+      sunColorHex = 0xff7a33;
+      sunInt = 2.5;
+      hemiSkyHex = 0xfb923c;
+      hemiGroundHex = 0x312e81;
+      hemiInt = 0.85;
+      starsAlpha = t * 0.40;
+    } else if (hour >= 19.5 || hour < 5.0) {
+      // --- NOITE PROFUNDA COM LUAR (22:30) ---
+      colZenith = '#020617';
+      colMid = '#090d16';
+      colHorizon = '#0f172a';
+      colGround = '#000000';
+      fogHex = 0x090d16;
+      fogDensity = 0.0026;
+      expVal = 1.25;
+
+      sunColorHex = 0xa5b4fc; // Luar suave
+      sunInt = 0.42;
+      hemiSkyHex = 0x1e293b;
+      hemiGroundHex = 0x020617;
+      hemiInt = 0.32;
+      starsAlpha = 0.92;
+    } else {
+      // --- AMANHECER (5:00 - 8.5) ---
+      colZenith = '#1e3a8a';
+      colMid = '#c026d3';
+      colHorizon = '#f59e0b';
+      colGround = '#1e293b';
+      fogHex = 0xf59e0b;
+      fogDensity = 0.0020;
+      expVal = 1.12;
+
+      sunColorHex = 0xffedd5;
+      sunInt = 2.0;
+      hemiSkyHex = 0xfde047;
+      hemiGroundHex = 0x1e293b;
+      hemiInt = 0.88;
+      starsAlpha = 0.15;
+    }
+
+    // Desenha gradiente equirretangular vertical (Zenith = y:0, Horizonte = y:128, Nadir/Chão = y:256)
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0.00, colZenith);
+    grad.addColorStop(0.38, colMid);
+    grad.addColorStop(0.50, colHorizon);
+    grad.addColorStop(0.53, colGround);
+    grad.addColorStop(1.00, colGround);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    if (elev > -0.10) {
+      const u = (Math.atan2(this.sunDir.z, this.sunDir.x) / (Math.PI * 2) + 0.5) * w;
+      const v = (0.5 - Math.asin(Math.max(-0.99, Math.min(0.99, this.sunDir.y))) / Math.PI) * h;
+      const sunGlow = ctx.createRadialGradient(u, v, 2, u, v, 42);
+      sunGlow.addColorStop(0.0, 'rgba(255, 255, 255, 0.95)');
+      sunGlow.addColorStop(0.3, hour > 16.0 ? 'rgba(255, 120, 40, 0.75)' : 'rgba(255, 240, 180, 0.70)');
+      sunGlow.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+      ctx.fillStyle = sunGlow;
+      ctx.beginPath();
+      ctx.arc(u, v, 42, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const u = (Math.atan2(this.moonDir.z, this.moonDir.x) / (Math.PI * 2) + 0.5) * w;
+      const v = (0.5 - Math.asin(Math.max(-0.99, Math.min(0.99, this.moonDir.y))) / Math.PI) * h;
+      const moonGlow = ctx.createRadialGradient(u, v, 2, u, v, 32);
+      moonGlow.addColorStop(0.0, 'rgba(230, 245, 255, 0.85)');
+      moonGlow.addColorStop(0.4, 'rgba(160, 205, 255, 0.40)');
+      moonGlow.addColorStop(1.0, 'rgba(160, 205, 255, 0.0)');
+      ctx.fillStyle = moonGlow;
+      ctx.beginPath();
+      ctx.arc(u, v, 32, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    this.skyTexture.needsUpdate = true;
+
+    // Atualiza PMREM e IBL na cena para reflexos PBR em tempo real na lataria e vidros
+    const renderTarget = this.pmremGenerator.fromEquirectangular(this.skyTexture);
+    if (this.prevRenderTarget) {
+      this.prevRenderTarget.dispose();
+    }
+    this.prevRenderTarget = renderTarget;
+    this.scene.environment = renderTarget.texture;
+    this.scene.background = this.skyTexture;
+
+    // Atualiza iluminação da cena
+    this.sunLight.color.setHex(sunColorHex);
+    this.sunLight.intensity = sunInt;
+    this.hemiLight.color.setHex(hemiSkyHex);
+    this.hemiLight.groundColor.setHex(hemiGroundHex);
+    this.hemiLight.intensity = hemiInt;
+
+    // Atualiza atmosfera (Névoa e Exposição do Tone Mapping)
+    if (this.scene.fog) {
+      this.scene.fog.color.setHex(fogHex);
+      this.scene.fog.density = fogDensity;
+    }
+    this.renderer.toneMappingExposure = expVal;
+
+    // Atualiza estrelas
+    if (this.starfield && this.starfield.material) {
+      this.starfield.material.opacity = starsAlpha;
+      this.starfield.visible = starsAlpha > 0.01;
+    }
+
+    // Visibilidade dos corpos celestes
+    this.sunSprite.visible = elev > -0.15;
+    this.moonSprite.visible = elev < 0.25;
+
+    this.lastPmremHour = hour;
+  }
+
+  update(dt, carPos) {
+    if (!carPos) return;
+
+    if (this.mode === 'auto') {
+      this.hour = (this.hour + dt * 0.15) % 24.0;
+      state.timeHour = this.hour;
+
+      if (Math.abs(this.hour - this.lastPmremHour) >= 0.08) {
+        const { elev } = this.calcCelestialVectors(this.hour);
+        this.renderSkyEquirectangular(this.hour, elev);
+      }
+    }
+
+    this.celestialGroup.position.copy(carPos);
+    this.sunSprite.position.copy(this.sunDir).multiplyScalar(440.0);
+    this.moonSprite.position.copy(this.moonDir).multiplyScalar(440.0);
+
+    if (this.starfield && this.starfield.visible) {
+      this.starfield.rotation.y += dt * 0.002;
+    }
+  }
+
+  applyPreset(mode, force = false) {
+    this.mode = mode;
+    state.timeOfDay = mode;
+
+    if (mode === 'day') {
+      this.hour = 12.0;
+    } else if (mode === 'sunset') {
+      this.hour = 17.75;
+    } else if (mode === 'night') {
+      this.hour = 22.5;
+    }
+    state.timeHour = this.hour;
+
+    const { elev } = this.calcCelestialVectors(this.hour);
+    this.renderSkyEquirectangular(this.hour, elev);
+    this.updateHudDom();
+  }
+
+  getLabel() {
+    switch (this.mode) {
+      case 'day': return '☀️ DIA';
+      case 'sunset': return '🌅 PÔR DO SOL';
+      case 'night': return '🌙 NOITE';
+      case 'auto': return '🔄 CICLO AUTO';
+      default: return '☀️ DIA';
+    }
+  }
+
+  getMobileLabel() {
+    switch (this.mode) {
+      case 'day': return 'DIA';
+      case 'sunset': return 'TARDE';
+      case 'night': return 'NOITE';
+      case 'auto': return 'AUTO';
+      default: return 'DIA';
+    }
+  }
+
+  getMobileIcon() {
+    switch (this.mode) {
+      case 'day': return '☀️';
+      case 'sunset': return '🌅';
+      case 'night': return '🌙';
+      case 'auto': return '🔄';
+      default: return '☀️';
+    }
+  }
+
+  getHudClass() {
+    return `tod-${this.mode}`;
+  }
+
+  updateHudDom() {
+    const todLabel = document.getElementById('tod-label');
+    const btnTod = document.getElementById('btn-tod');
+    const mTodTxt = document.getElementById('m-tod-txt');
+    const mBtnTod = document.getElementById('mbtn-tod');
+
+    if (todLabel) todLabel.textContent = this.getLabel();
+    if (btnTod) {
+      btnTod.classList.remove('tod-day', 'tod-sunset', 'tod-night', 'tod-auto');
+      btnTod.classList.add(this.getHudClass());
+    }
+
+    if (mTodTxt) mTodTxt.textContent = this.getMobileLabel();
+    if (mBtnTod) {
+      const iconSpan = mBtnTod.querySelector('.m-icon');
+      if (iconSpan) iconSpan.textContent = this.getMobileIcon();
+    }
+  }
+}
+
+const envTimeSystem = new EnvironmentTimeSystem(scene, renderer, sunLight, hemiLight);
+
+function cycleTimeOfDay() {
+  if (!envTimeSystem) return;
+  const modes = ['day', 'sunset', 'night', 'auto'];
+  const curIdx = modes.indexOf(envTimeSystem.mode);
+  const nextMode = modes[(curIdx + 1) % modes.length];
+  envTimeSystem.applyPreset(nextMode);
+
+  // Se ativou o modo noturno e os faróis estavam apagados, acende-os automaticamente
+  if (nextMode === 'night' && !state.headlightsOn) {
+    toggleHeadlights();
+  }
+}
 
 // Mundo Físico Cannon-es
 const world = new CANNON.World();
@@ -2049,12 +2545,18 @@ function syncVisualMeshes() {
     }
   }
 
-  sunLight.position.set(
-    chassisBody.position.x + 35,
-    chassisBody.position.y + 70,
-    chassisBody.position.z + 25
-  );
-  sunLight.target.position.copy(corsaChassisVisual.position);
+  if (envTimeSystem) {
+    const lightDir = envTimeSystem.activeLightDir;
+    sunLight.position.copy(corsaChassisVisual.position).addScaledVector(lightDir, 85.0);
+    sunLight.target.position.copy(corsaChassisVisual.position);
+  } else {
+    sunLight.position.set(
+      chassisBody.position.x + 35,
+      chassisBody.position.y + 70,
+      chassisBody.position.z + 25
+    );
+    sunLight.target.position.copy(corsaChassisVisual.position);
+  }
 }
 
 // ============================================================================
@@ -2255,7 +2757,11 @@ const hudDom = {
   turboLabel: document.getElementById('turbo-label'),
   btnTurbo: document.getElementById('btn-turbo'),
   mTurboTxt: document.getElementById('m-turbo-txt'),
-  mBtnTurbo: document.getElementById('mbtn-turbo')
+  mBtnTurbo: document.getElementById('mbtn-turbo'),
+  todLabel: document.getElementById('tod-label'),
+  btnTod: document.getElementById('btn-tod'),
+  mTodTxt: document.getElementById('m-tod-txt'),
+  mBtnTod: document.getElementById('mbtn-tod')
 };
 
 function updateHUD() {
@@ -2346,6 +2852,10 @@ function updateHUD() {
 
   if (hudDom.mSpawnTxt) {
     hudDom.mSpawnTxt.textContent = `AV. ${state.spawnIdx + 1}`;
+  }
+
+  if (envTimeSystem && envTimeSystem.mode === 'auto') {
+    envTimeSystem.updateHudDom();
   }
 
   // Atualiza botões e indicadores do Turbo
@@ -2498,6 +3008,8 @@ window.addEventListener('keydown', (e) => {
       setTurboInstalled(!state.turboInstalled);
     } else if (k === 'l') {
       toggleHeadlights();
+    } else if (k === 'h') {
+      cycleTimeOfDay();
     } else if (k === 'i') {
       toggleEngineIgnition();
     } else if (k === 'c') {
@@ -2779,6 +3291,11 @@ function setupMobileControls() {
     toggleHeadlights();
   });
 
+  document.getElementById('mbtn-tod')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    cycleTimeOfDay();
+  });
+
   document.getElementById('mbtn-transmission')?.addEventListener('click', (e) => {
     e.preventDefault();
     toggleTransmissionMode();
@@ -2856,6 +3373,7 @@ startBtn.addEventListener('click', () => {
 });
 
 document.getElementById('btn-transmission').addEventListener('click', toggleTransmissionMode);
+document.getElementById('btn-tod')?.addEventListener('click', cycleTimeOfDay);
 document.getElementById('btn-lights').addEventListener('click', toggleHeadlights);
 document.getElementById('btn-ignition').addEventListener('click', toggleEngineIgnition);
 document.getElementById('btn-camera').addEventListener('click', cycleCameraMode);
@@ -2886,6 +3404,9 @@ function animate(now) {
     }
     updateVehiclePhysicsAndEffects(dt);
     syncVisualMeshes();
+    if (envTimeSystem) {
+      envTimeSystem.update(dt, corsaChassisVisual ? corsaChassisVisual.position : camera.position);
+    }
     updateCamera(dt);
     smokeSystem.update(dt, camera);
     carAudio.update(dt);

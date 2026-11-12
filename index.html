@@ -41,6 +41,7 @@
         <div class="ctrl-item"><kbd>+</kbd> <kbd>-</kbd> Passar Marchas</div>
         <div class="ctrl-item"><kbd>M</kbd> Câmbio Auto / Manual</div>
         <div class="ctrl-item"><kbd>T</kbd> Instalar Turbo</div>
+        <div class="ctrl-item"><kbd>H</kbd> Clima Dia/Noite</div>
         <div class="ctrl-item"><kbd>L</kbd> Faróis</div>
         <div class="ctrl-item"><kbd>I</kbd> Motor</div>
         <div class="ctrl-item"><kbd>C</kbd> Câmera / <kbd>R</kbd> Reset</div>
@@ -110,6 +111,9 @@
     <div class="hud-panel actions-panel">
       <button id="btn-transmission" class="hud-btn active-mode" title="Atalho: Tecla M">
         CÂMBIO: <strong id="trans-label">MANUAL</strong>
+      </button>
+      <button id="btn-tod" class="hud-btn tod-day" title="Alternar Horário / Clima (Atalho: Tecla H)">
+        CLIMA: <strong id="tod-label">☀️ DIA</strong>
       </button>
       <button id="btn-lights" class="hud-btn engine-off" title="Atalho: Tecla L">
         FARÓIS: <strong id="lights-label">OFF</strong>
@@ -188,7 +192,7 @@
 
   <!-- Bottom Left Controls Reminder -->
   <div id="controls-helper" class="hud-hidden">
-    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis</div>
+    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis &bull; <kbd>H</kbd> Clima</div>
     <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>T</kbd> Turbo &bull; <kbd>I</kbd> Ignição</div>
     <div><kbd>C</kbd> Câmera (Perseguição / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
   </div>
@@ -204,6 +208,10 @@
       <button id="mbtn-turbo" class="m-action-btn" type="button" title="Instalar / Remover Turbo">
         <span class="m-icon">🐌</span>
         <span id="m-turbo-txt" class="m-txt">TURBO: OFF</span>
+      </button>
+      <button id="mbtn-tod" class="m-action-btn" type="button" title="Alternar Dia / Tarde / Noite">
+        <span class="m-icon">☀️</span>
+        <span id="m-tod-txt" class="m-txt">DIA</span>
       </button>
       <button id="mbtn-lights" class="m-action-btn" type="button" title="Ligar / Desligar Faróis">
         <span class="m-icon">💡</span>
