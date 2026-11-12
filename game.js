@@ -283,7 +283,7 @@ class SpatialCarAudio {
       this.sources.turbo.setBuffer(this.rawBuffers.turbo);
       this.sources.turbo.setLoop(false);
     }
-    this.sources.turboWhistle = this.createPositionalNode(this.engineAnchor, 3.0, 90);
+    this.sources.turboWhistle = this.createPositionalNode(this.engineAnchor, 2.2, 70);
   }
 
   initTurboWhistleSynth() {
@@ -291,47 +291,48 @@ class SpatialCarAudio {
     this.turboWhistleInitialized = true;
 
     try {
-      // [1] Oscilador senoidal puro (agudo característico da turbina)
+      // [1] Oscilador senoidal suave e aveludado (assovio macio de turbina, sem estridência)
       this.turboOsc = this.ctx.createOscillator();
       this.turboOsc.type = 'sine';
-      this.turboOsc.frequency.setValueAtTime(1100, this.ctx.currentTime);
+      this.turboOsc.frequency.setValueAtTime(620, this.ctx.currentTime);
+      const oscGain = this.ctx.createGain();
+      oscGain.gain.setValueAtTime(0.18, this.ctx.currentTime);
+      this.turboOsc.connect(oscGain);
 
-      // [2] Segundo oscilador (harmônico superior metálico)
-      this.turboHarmonic = this.ctx.createOscillator();
-      this.turboHarmonic.type = 'triangle';
-      this.turboHarmonic.frequency.setValueAtTime(2200, this.ctx.currentTime);
-      const harmonicGain = this.ctx.createGain();
-      harmonicGain.gain.setValueAtTime(0.18, this.ctx.currentTime);
-      this.turboHarmonic.connect(harmonicGain);
+      // [2] Filtro passa-baixas dedicado para cortar frequências agudas estridentes
+      this.turboToneFilter = this.ctx.createBiquadFilter();
+      this.turboToneFilter.type = 'lowpass';
+      this.turboToneFilter.frequency.setValueAtTime(1600, this.ctx.currentTime);
+      this.turboToneFilter.Q.setValueAtTime(0.8, this.ctx.currentTime);
 
-      // [3] Gerador de fluxo de ar aspirado (ruído dinâmico filtrado em passa-faixa)
+      // [3] Gerador de sucção de ar suave e aveludado (ruído filtrado em passa-faixa macio)
       const bufferSize = Math.floor(this.ctx.sampleRate * 2);
       const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
       const data = noiseBuffer.getChannelData(0);
       for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * 0.35;
+        data[i] = (Math.random() * 2 - 1) * 0.18;
       }
       this.turboNoise = this.ctx.createBufferSource();
       this.turboNoise.buffer = noiseBuffer;
       this.turboNoise.loop = true;
 
-      this.turboFilter = this.ctx.createBiquadFilter();
-      this.turboFilter.type = 'bandpass';
-      this.turboFilter.Q.setValueAtTime(5.5, this.ctx.currentTime);
-      this.turboFilter.frequency.setValueAtTime(1400, this.ctx.currentTime);
+      this.turboAirFilter = this.ctx.createBiquadFilter();
+      this.turboAirFilter.type = 'bandpass';
+      this.turboAirFilter.Q.setValueAtTime(2.4, this.ctx.currentTime);
+      this.turboAirFilter.frequency.setValueAtTime(780, this.ctx.currentTime);
 
-      const noiseGain = this.ctx.createGain();
-      noiseGain.gain.setValueAtTime(0.38, this.ctx.currentTime);
-      this.turboNoise.connect(noiseGain);
-      noiseGain.connect(this.turboFilter);
+      const airGain = this.ctx.createGain();
+      airGain.gain.setValueAtTime(0.20, this.ctx.currentTime);
+      this.turboNoise.connect(airGain);
+      airGain.connect(this.turboAirFilter);
 
-      // Ganho mestre do assovio do turbo
+      // Ganho mestre do assovio do turbo (calibrado para ser sutil e mais baixo)
       this.turboMasterGain = this.ctx.createGain();
       this.turboMasterGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
 
-      this.turboOsc.connect(this.turboMasterGain);
-      harmonicGain.connect(this.turboMasterGain);
-      this.turboFilter.connect(this.turboMasterGain);
+      oscGain.connect(this.turboToneFilter);
+      this.turboAirFilter.connect(this.turboToneFilter);
+      this.turboToneFilter.connect(this.turboMasterGain);
 
       // Conecta no Three.js PositionalAudio ancorado no cofre do motor
       if (this.sources.turboWhistle && this.sources.turboWhistle.gain) {
@@ -339,7 +340,6 @@ class SpatialCarAudio {
       }
 
       this.turboOsc.start();
-      this.turboHarmonic.start();
       this.turboNoise.start();
     } catch (err) {
       console.warn('Erro ao inicializar sintetizador de assovio do turbo:', err);
@@ -442,21 +442,23 @@ class SpatialCarAudio {
     }
 
     // ========================================================================
-    // ASSOVIO DO TURBO ENCHENDO AOS POUCOS (PITCH E VOLUME DINÂMICOS)
+    // ASSOVIO DO TURBO ENCHENDO (SUTIL, MACIO E MAIS BAIXO)
     // ========================================================================
     if (this.turboMasterGain) {
-      if (state.engineOn && state.turboInstalled && state.turboBoost > 0.02) {
-        // Conforme a turbina enche (0.0 a 1.0), o tom sobe de 1.100 Hz até 3.300 Hz
-        const basePitchHz = 1100 + state.turboBoost * 2100 + (state.rpm / CORSA_SPECS.MaxRPM) * 400;
-        this.turboOsc.frequency.setTargetAtTime(basePitchHz, now, 0.04);
-        this.turboHarmonic.frequency.setTargetAtTime(basePitchHz * 1.5, now, 0.04);
-        this.turboFilter.frequency.setTargetAtTime(basePitchHz * 1.05, now, 0.04);
+      if (state.engineOn && state.turboInstalled && state.turboBoost > 0.04) {
+        // Conforme a turbina enche (0.0 a 1.0), o tom sobe suavemente de 620 Hz até 1.350 Hz
+        const basePitchHz = 620 + state.turboBoost * 620 + (state.rpm / CORSA_SPECS.MaxRPM) * 140;
+        this.turboOsc.frequency.setTargetAtTime(basePitchHz, now, 0.05);
 
-        // O volume aumenta progressivamente com a pressão do turbo
-        const boostVol = Math.pow(state.turboBoost, 1.25) * 0.46 * (0.35 + state.throttleInput * 0.65);
-        this.turboMasterGain.gain.setTargetAtTime(boostVol, now, 0.035);
+        if (this.turboAirFilter) {
+          this.turboAirFilter.frequency.setTargetAtTime(720 + state.turboBoost * 580, now, 0.05);
+        }
+
+        // Volume sutil, equilibrado e bem mais baixo que o ronco do motor
+        const boostVol = Math.pow(state.turboBoost, 1.5) * 0.15 * (0.30 + state.throttleInput * 0.70);
+        this.turboMasterGain.gain.setTargetAtTime(boostVol, now, 0.045);
       } else {
-        this.turboMasterGain.gain.setTargetAtTime(0.0, now, 0.03);
+        this.turboMasterGain.gain.setTargetAtTime(0.0, now, 0.035);
       }
     }
 
