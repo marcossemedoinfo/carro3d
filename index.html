@@ -42,10 +42,23 @@
         <div class="ctrl-item"><kbd>M</kbd> Câmbio Auto / Manual</div>
         <div class="ctrl-item"><kbd>T</kbd> Instalar Turbo</div>
         <div class="ctrl-item"><kbd>H</kbd> Clima Dia/Noite</div>
+        <div class="ctrl-item"><kbd>G</kbd> Gráficos</div>
         <div class="ctrl-item"><kbd>L</kbd> Faróis</div>
         <div class="ctrl-item"><kbd>I</kbd> Motor</div>
         <div class="ctrl-item"><kbd>C</kbd> Câmera / <kbd>R</kbd> Reset</div>
       </div>
+
+      <!-- Botão para abrir configurações gráficas antes de iniciar -->
+      <button id="start-graphics-btn" class="mobile-toggle-btn" type="button">
+        <div class="toggle-left">
+          <span class="btn-icon">⚙️</span>
+          <div class="toggle-text">
+            <span class="toggle-title">Qualidade Gráfica</span>
+            <span class="toggle-desc">Ajuste sombras, reflexos e resolução (Low, Medium, High, Ultra)</span>
+          </div>
+        </div>
+        <span id="start-graphics-badge" class="toggle-badge">ALTO</span>
+      </button>
 
       <!-- Botão para ativar modo celular com joystick e pedais na tela -->
       <button id="mobile-toggle-btn" class="mobile-toggle-btn" type="button">
@@ -114,6 +127,9 @@
       </button>
       <button id="btn-tod" class="hud-btn tod-day" title="Alternar Horário / Clima (Atalho: Tecla H)">
         CLIMA: <strong id="tod-label">☀️ DIA</strong>
+      </button>
+      <button id="btn-graphics" class="hud-btn" title="Configurações Gráficas (Atalho: Tecla G)">
+        ⚙️ GRÁFICOS: <strong id="graphics-label">ALTO</strong>
       </button>
       <button id="btn-lights" class="hud-btn engine-off" title="Atalho: Tecla L">
         FARÓIS: <strong id="lights-label">OFF</strong>
@@ -192,7 +208,7 @@
 
   <!-- Bottom Left Controls Reminder -->
   <div id="controls-helper" class="hud-hidden">
-    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis &bull; <kbd>H</kbd> Clima</div>
+    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis &bull; <kbd>H</kbd> Clima &bull; <kbd>G</kbd> Gráficos</div>
     <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>T</kbd> Turbo &bull; <kbd>I</kbd> Ignição</div>
     <div><kbd>C</kbd> Câmera (Perseguição / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
   </div>
@@ -212,6 +228,10 @@
       <button id="mbtn-tod" class="m-action-btn" type="button" title="Alternar Dia / Tarde / Noite">
         <span class="m-icon">☀️</span>
         <span id="m-tod-txt" class="m-txt">DIA</span>
+      </button>
+      <button id="mbtn-graphics" class="m-action-btn" type="button" title="Configurações Gráficas">
+        <span class="m-icon">🖼️</span>
+        <span id="m-graphics-txt" class="m-txt">ALTO</span>
       </button>
       <button id="mbtn-lights" class="m-action-btn" type="button" title="Ligar / Desligar Faróis">
         <span class="m-icon">💡</span>
@@ -270,6 +290,66 @@
           <span class="pedal-icon">⚡</span>
           <span class="pedal-label">ACELERAR</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Configurações Gráficas (Low / Medium / High / Ultra) -->
+  <div id="graphics-modal" class="modal-backdrop hud-hidden" role="dialog" aria-label="Configurações Gráficas">
+    <div class="graphics-card">
+      <div class="graphics-header">
+        <div>
+          <div class="badge-sim">DESEMPENHO &amp; QUALIDADE VISUAL</div>
+          <h2>⚙️ CONFIGURAÇÕES GRÁFICAS</h2>
+        </div>
+        <button id="close-graphics-btn" class="close-modal-btn" type="button" title="Fechar (ESC / G)">&times;</button>
+      </div>
+
+      <div class="graphics-presets-grid">
+        <button class="gfx-preset-card" data-quality="low" type="button">
+          <div class="gfx-title">LOW <span class="gfx-tag">BAIXO</span></div>
+          <div class="gfx-desc">Máximo FPS para PCs simples e celulares. Sem sombras dinâmicas e sem reflexos.</div>
+          <ul class="gfx-specs">
+            <li>Resolução: 75%</li>
+            <li>Sombras: Apenas contato</li>
+            <li>Reflexos: Desligados</li>
+          </ul>
+        </button>
+
+        <button class="gfx-preset-card" data-quality="medium" type="button">
+          <div class="gfx-title">MEDIUM <span class="gfx-tag">MÉDIO</span></div>
+          <div class="gfx-desc">Equilíbrio entre visual bonito e fluidez constante a 60 FPS.</div>
+          <ul class="gfx-specs">
+            <li>Resolução: 100%</li>
+            <li>Sombras: 1024px</li>
+            <li>Reflexos: Céu e Nuvens</li>
+          </ul>
+        </button>
+
+        <button class="gfx-preset-card active" data-quality="high" type="button">
+          <div class="gfx-title">HIGH <span class="gfx-tag">ALTO</span></div>
+          <div class="gfx-desc">Pintura automotiva com verniz (Clearcoat), reflexos nítidos e sombras suaves.</div>
+          <ul class="gfx-specs">
+            <li>Resolução: até 150%</li>
+            <li>Sombras: 2048px Suaves</li>
+            <li>Reflexos: Clearcoat + Horizonte 360°</li>
+          </ul>
+        </button>
+
+        <button class="gfx-preset-card" data-quality="ultra" type="button">
+          <div class="gfx-title">ULTRA <span class="gfx-tag">MÁXIMO</span></div>
+          <div class="gfx-desc">Fidelidade máxima com reflexos dinâmicos 3D da cidade em tempo real na lataria.</div>
+          <ul class="gfx-specs">
+            <li>Resolução: até 200% (Nativa)</li>
+            <li>Sombras: 4096px Ultra</li>
+            <li>Reflexos: Cidade 3D em Tempo Real</li>
+          </ul>
+        </button>
+      </div>
+
+      <div class="graphics-footer">
+        <span class="graphics-hint">Aplicado instantaneamente sem reiniciar &bull; Atalho: <kbd>G</kbd></span>
+        <button id="confirm-graphics-btn" class="confirm-gfx-btn" type="button">FECHAR E VOLTAR</button>
       </div>
     </div>
   </div>

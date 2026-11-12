@@ -88,6 +88,88 @@ const WHEEL_HUBS_LOCAL = [
 // ============================================================================
 // 2. ESTADO GLOBAL DA SIMULAÇÃO
 // ============================================================================
+const GRAPHICS_PRESETS = {
+  low: {
+    key: 'low',
+    label: 'BAIXO',
+    pixelRatio: 0.75,
+    shadows: false,
+    shadowType: THREE.BasicShadowMap,
+    shadowSize: 512,
+    shadowDist: 14,
+    reflections: 'off',
+    envResolution: [256, 128],
+    clearcoat: false,
+    realtimeCube: false,
+    maxSmokeParticles: 60,
+    cameraFar: 420,
+    fogMult: 1.35
+  },
+  medium: {
+    key: 'medium',
+    label: 'MÉDIO',
+    pixelRatio: 1.0,
+    shadows: true,
+    shadowType: THREE.PCFShadowMap,
+    shadowSize: 1024,
+    shadowDist: 16,
+    reflections: 'sky',
+    envResolution: [512, 256],
+    clearcoat: false,
+    realtimeCube: false,
+    maxSmokeParticles: 160,
+    cameraFar: 620,
+    fogMult: 1.05
+  },
+  high: {
+    key: 'high',
+    label: 'ALTO',
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
+    shadows: true,
+    shadowType: THREE.PCFSoftShadowMap,
+    shadowSize: 2048,
+    shadowDist: 22,
+    reflections: 'clearcoat',
+    envResolution: [1024, 512],
+    clearcoat: true,
+    realtimeCube: false,
+    maxSmokeParticles: 260,
+    cameraFar: 850,
+    fogMult: 1.0
+  },
+  ultra: {
+    key: 'ultra',
+    label: 'ULTRA',
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 2.0),
+    shadows: true,
+    shadowType: THREE.PCFSoftShadowMap,
+    shadowSize: 4096,
+    shadowDist: 28,
+    reflections: 'realtime',
+    envResolution: [1024, 512],
+    clearcoat: true,
+    realtimeCube: true,
+    maxSmokeParticles: 320,
+    cameraFar: 1000,
+    fogMult: 0.90
+  }
+};
+
+function getSavedGraphicsQuality() {
+  try {
+    const saved = localStorage.getItem('corsa3d_graphics');
+    if (saved && GRAPHICS_PRESETS[saved]) return saved;
+  } catch (e) {}
+  return 'high';
+}
+
+const corsaReflectiveMaterials = {
+  paint: [],
+  glass: [],
+  chrome: []
+};
+const cityTrackedMaterials = new Set();
+
 const state = {
   loaded: false,
   started: false,
@@ -95,6 +177,8 @@ const state = {
   startingEngine: false,
   timeOfDay: 'day',       // 'day', 'sunset', 'night', 'auto'
   timeHour: 12.0,
+  graphicsQuality: getSavedGraphicsQuality(),
+  graphicsMenuOpen: false,
   headlightsOn: false,    // Faróis dianteiros e lanternas traseiras (Tecla L ou botão HUD)
   turboInstalled: false,  // Kit Turbo com espirro de alívio nas trocas de marcha e torque extra
   turboBoost: 0.0,        // Pressão atual da turbina: 0.0 (sem pressão) a 1.0 (turbo cheio / 1.5 bar)
@@ -502,6 +586,7 @@ class SpatialCarAudio {
 class SmokeParticleSystem {
   constructor(scene, maxParticles = 320) {
     this.maxParticles = maxParticles;
+    this.activeLimit = maxParticles;
     this.pool = [];
     this.index = 0;
 
@@ -547,9 +632,18 @@ class SmokeParticleSystem {
     }
   }
 
+  setActiveLimit(limit) {
+    this.activeLimit = Math.max(10, Math.min(this.maxParticles, limit));
+    for (let i = this.activeLimit; i < this.maxParticles; i++) {
+      this.pool[i].active = false;
+      this.pool[i].mesh.visible = false;
+    }
+    this.index = this.index % this.activeLimit;
+  }
+
   spawn(pos, vel, opts = {}) {
     const p = this.pool[this.index];
-    this.index = (this.index + 1) % this.maxParticles;
+    this.index = (this.index + 1) % this.activeLimit;
 
     p.active = true;
     p.age = 0;
@@ -746,28 +840,58 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
     const matName = (mesh.material?.name || '').toLowerCase();
     const nodeName = (mesh.name || '').toLowerCase();
 
-    const clonedMat = mesh.material.clone();
+    let clonedMat;
     if (matName.includes('carpaint')) {
-      clonedMat.metalness = 0.45;
-      clonedMat.roughness = 0.22;
-      clonedMat.envMapIntensity = 1.3;
+      // Pintura automotiva física com camada de verniz (Clearcoat) para reflexos nítidos e profundos
+      clonedMat = new THREE.MeshPhysicalMaterial({
+        name: mesh.material.name,
+        color: mesh.material.color.clone(),
+        map: mesh.material.map || null,
+        side: mesh.material.side,
+        metalness: 0.24,
+        roughness: 0.22,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.035,
+        ior: 1.5,
+        reflectivity: 1.0,
+        envMapIntensity: 1.9
+      });
+      corsaReflectiveMaterials.paint.push(clonedMat);
     } else if (matName.includes('windowglass') || matName.includes('clearglass')) {
-      clonedMat.transparent = true;
-      clonedMat.opacity = 0.35;
-      clonedMat.roughness = 0.08;
-      clonedMat.metalness = 0.1;
-      clonedMat.depthWrite = false;
-      clonedMat.side = THREE.DoubleSide;
-    } else if (matName.includes('interior')) {
-      clonedMat.roughness = 0.85;
-      clonedMat.metalness = 0.05;
-      clonedMat.side = THREE.DoubleSide;
-    } else if (matName.includes('chrome') || matName.includes('rim')) {
-      clonedMat.metalness = 0.85;
-      clonedMat.roughness = 0.18;
-    } else if (matName.includes('tire')) {
-      clonedMat.roughness = 0.82;
-      clonedMat.metalness = 0.05;
+      clonedMat = new THREE.MeshPhysicalMaterial({
+        name: mesh.material.name,
+        color: mesh.material.color.clone(),
+        transparent: true,
+        opacity: matName.includes('clearglass') ? 0.30 : 0.48,
+        roughness: 0.03,
+        metalness: 0.12,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.02,
+        reflectivity: 1.0,
+        envMapIntensity: 2.3,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      });
+      corsaReflectiveMaterials.glass.push(clonedMat);
+    } else {
+      clonedMat = mesh.material.clone();
+      if (matName.includes('interior')) {
+        clonedMat.roughness = 0.85;
+        clonedMat.metalness = 0.05;
+        clonedMat.envMapIntensity = 0.3;
+        clonedMat.side = THREE.DoubleSide;
+      } else if (matName.includes('chrome') || matName.includes('rim') || matName.includes('mirror') || matName === 'material') {
+        clonedMat.metalness = matName.includes('mirror') ? 0.98 : 0.88;
+        clonedMat.roughness = matName.includes('mirror') ? 0.03 : 0.14;
+        clonedMat.envMapIntensity = 1.95;
+        corsaReflectiveMaterials.chrome.push(clonedMat);
+      } else if (matName.includes('tire') || matName === 'black') {
+        clonedMat.roughness = 0.84;
+        clonedMat.metalness = 0.04;
+        clonedMat.envMapIntensity = 0.35;
+      } else {
+        clonedMat.envMapIntensity = 0.5;
+      }
     }
 
     const isPureWheelMaterial =
@@ -906,6 +1030,14 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     if (child.isMesh && child.geometry && child.geometry.attributes.position) {
       child.castShadow = false;
       child.receiveShadow = false;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((m) => {
+        if (m && !cityTrackedMaterials.has(m)) {
+          cityTrackedMaterials.add(m);
+          // Reduz o ganho de IBL nos prédios e no asfalto para evitar iluminação estourada durante o dia
+          m.envMapIntensity = 0.22;
+        }
+      });
       meshes.push(child);
     }
   });
@@ -1411,7 +1543,7 @@ scene.add(sunLight);
 scene.add(sunLight.target);
 
 // ============================================================================
-// SISTEMA DINÂMICO DE ILUMINAÇÃO, REFLEXOS PBR E CICLO DIA/NOITE (ENVIRONMENT)
+// SISTEMA DINÂMICO DE ILUMINAÇÃO, REFLEXOS PBR, QUALIDADE GRÁFICA E CICLO DIA/NOITE
 // ============================================================================
 class EnvironmentTimeSystem {
   constructor(scene, renderer, sunLight, hemiLight) {
@@ -1424,19 +1556,68 @@ class EnvironmentTimeSystem {
     this.hour = 12.0;
     this.lastPmremHour = -999;
     this.prevRenderTarget = null;
+    this.prevCarCubePmrem = null;
+    this.graphicsPreset = GRAPHICS_PRESETS[state.graphicsQuality] || GRAPHICS_PRESETS.high;
+    this.currentFogDensity = 0.0011;
 
-    // PMREM Generator para reflexos PBR em tempo real na lataria, vidros e cromados
+    // PMREM Generator para reflexos PBR na lataria, vidros e cromados
     this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
     this.pmremGenerator.compileEquirectangularShader();
 
-    // Canvas equirretangular de alta fidelidade para o domo celeste (512x256)
-    this.skyCanvas = document.createElement('canvas');
-    this.skyCanvas.width = 512;
-    this.skyCanvas.height = 256;
-    this.skyCtx = this.skyCanvas.getContext('2d');
+    // 1. Canvas limpo para o fundo do céu (scene.background)
+    this.skyBgCanvas = document.createElement('canvas');
+    this.skyBgCanvas.width = 1024;
+    this.skyBgCanvas.height = 512;
+    this.skyBgCtx = this.skyBgCanvas.getContext('2d');
+    this.skyBgTexture = new THREE.CanvasTexture(this.skyBgCanvas);
+    this.skyBgTexture.mapping = THREE.EquirectangularReflectionMapping;
+    this.skyBgTexture.colorSpace = THREE.SRGBColorSpace; // CRÍTICO: evita estouro branco por dupla conversão gamma!
 
-    this.skyTexture = new THREE.CanvasTexture(this.skyCanvas);
-    this.skyTexture.mapping = THREE.EquirectangularReflectionMapping;
+    // 2. Canvas de reflexão detalhado (Nuvens + Horizonte Urbano 360° + Asfalto + Brilho Solar)
+    this.envCanvas = document.createElement('canvas');
+    this.envCanvas.width = this.graphicsPreset.envResolution[0];
+    this.envCanvas.height = this.graphicsPreset.envResolution[1];
+    this.envCtx = this.envCanvas.getContext('2d');
+    this.envTexture = new THREE.CanvasTexture(this.envCanvas);
+    this.envTexture.mapping = THREE.EquirectangularReflectionMapping;
+    this.envTexture.colorSpace = THREE.SRGBColorSpace;
+
+    // 3. CubeCamera para reflexos reais da cidade 3D em tempo real no modo ULTRA
+    this.cubeRenderTarget = new THREE.WebGLCubeRenderTarget(128, {
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+      colorSpace: THREE.SRGBColorSpace
+    });
+    this.cubeCamera = new THREE.CubeCamera(0.8, 500, this.cubeRenderTarget);
+    this.cubeFaceIdx = 0;
+
+    // Nuvens procedurais determinísticas para o domo celeste e reflexos no capô
+    this.clouds = [];
+    for (let i = 0; i < 42; i++) {
+      const seed = (i * 9301 + 49297) % 233280;
+      const r1 = seed / 233280;
+      const r2 = ((seed * 7 + 13) % 233280) / 233280;
+      const r3 = ((seed * 17 + 29) % 233280) / 233280;
+      this.clouds.push({
+        u: r1,
+        v: 0.14 + r2 * 0.28,
+        rx: 0.03 + r3 * 0.06,
+        ry: 0.012 + r2 * 0.022,
+        alpha: 0.22 + r3 * 0.28
+      });
+    }
+
+    // Silhueta urbana 360° exclusiva para o mapa de reflexão da lataria e vidros
+    this.skylineBuildings = [];
+    let bx = 0;
+    let bIdx = 0;
+    while (bx < 1.0) {
+      const bw = 0.012 + (((bIdx * 37) % 19) / 19) * 0.024;
+      const bh = 0.022 + (((bIdx * 53) % 23) / 23) * 0.075;
+      this.skylineBuildings.push({ x: bx, w: bw, h: bh, lit: bIdx % 3 === 0 });
+      bx += bw * 0.85;
+      bIdx++;
+    }
 
     // Grupo de corpos celestes 3D (Sol com corona, Lua brilhante e campo estelar)
     this.celestialGroup = new THREE.Group();
@@ -1464,18 +1645,18 @@ class EnvironmentTimeSystem {
     canvas.height = 256;
     const ctx = canvas.getContext('2d');
 
-    // Gradiente esférico do Sol: núcleo branco incandescente, corona dourada e halo térmico suave
-    const grad = ctx.createRadialGradient(128, 128, 14, 128, 128, 124);
+    const grad = ctx.createRadialGradient(128, 128, 12, 128, 128, 124);
     grad.addColorStop(0.00, 'rgba(255, 255, 255, 1.0)');
-    grad.addColorStop(0.16, 'rgba(255, 252, 220, 0.95)');
-    grad.addColorStop(0.35, 'rgba(255, 205, 90, 0.75)');
-    grad.addColorStop(0.65, 'rgba(255, 140, 40, 0.30)');
+    grad.addColorStop(0.14, 'rgba(255, 248, 210, 0.92)');
+    grad.addColorStop(0.32, 'rgba(255, 198, 85, 0.65)');
+    grad.addColorStop(0.65, 'rgba(255, 145, 45, 0.22)');
     grad.addColorStop(1.00, 'rgba(255, 100, 20, 0.0)');
 
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 256, 256);
 
     const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.SpriteMaterial({
       map: texture,
       blending: THREE.AdditiveBlending,
@@ -1484,7 +1665,7 @@ class EnvironmentTimeSystem {
     });
 
     const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(72, 72, 1);
+    sprite.scale.set(66, 66, 1);
     return sprite;
   }
 
@@ -1494,7 +1675,6 @@ class EnvironmentTimeSystem {
     canvas.height = 256;
     const ctx = canvas.getContext('2d');
 
-    // Disco lunar com crateras sutis e aura azulada fria
     const halo = ctx.createRadialGradient(128, 128, 28, 128, 128, 124);
     halo.addColorStop(0.0, 'rgba(215, 235, 255, 0.85)');
     halo.addColorStop(0.32, 'rgba(165, 205, 255, 0.45)');
@@ -1520,6 +1700,7 @@ class EnvironmentTimeSystem {
     ctx.fill();
 
     const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
     const mat = new THREE.SpriteMaterial({
       map: texture,
       blending: THREE.AdditiveBlending,
@@ -1604,152 +1785,277 @@ class EnvironmentTimeSystem {
     return { elev, isDaytime };
   }
 
-  renderSkyEquirectangular(hour, elev) {
-    const ctx = this.skyCtx;
-    const w = 512;
-    const h = 256;
-
-    let colZenith, colMid, colHorizon, colGround, fogHex, fogDensity, expVal;
-    let sunColorHex, sunInt, hemiSkyHex, hemiGroundHex, hemiInt;
-    let starsAlpha = 0.0;
-
-    if (hour >= 8.5 && hour <= 16.0) {
-      // --- DIA (12:00) ---
-      colZenith = '#1d4ed8';
-      colMid = '#60a5fa';
-      colHorizon = '#bfdbfe';
-      colGround = '#334155';
-      fogHex = 0x93c5fd;
-      fogDensity = 0.0016;
-      expVal = 1.10;
-
-      sunColorHex = 0xfff8e7;
-      sunInt = 2.2;
-      hemiSkyHex = 0x93c5fd;
-      hemiGroundHex = 0x334155;
-      hemiInt = 0.95;
-      starsAlpha = 0.0;
-    } else if (hour > 16.0 && hour < 19.5) {
-      // --- PÔR DO SOL / GOLDEN HOUR (17:45) ---
-      const t = (hour - 16.0) / 3.5;
-      colZenith = '#312e81';
-      colMid = '#9d174d';
-      colHorizon = '#ea580c';
-      colGround = '#1e1b4b';
-      fogHex = 0xd97706;
-      fogDensity = 0.0022;
-      expVal = 1.18;
-
-      sunColorHex = 0xff7a33;
-      sunInt = 2.5;
-      hemiSkyHex = 0xfb923c;
-      hemiGroundHex = 0x312e81;
-      hemiInt = 0.85;
-      starsAlpha = t * 0.40;
-    } else if (hour >= 19.5 || hour < 5.0) {
-      // --- NOITE PROFUNDA COM LUAR (22:30) ---
-      colZenith = '#020617';
-      colMid = '#090d16';
-      colHorizon = '#0f172a';
-      colGround = '#000000';
-      fogHex = 0x090d16;
-      fogDensity = 0.0026;
-      expVal = 1.25;
-
-      sunColorHex = 0xa5b4fc; // Luar suave
-      sunInt = 0.42;
-      hemiSkyHex = 0x1e293b;
-      hemiGroundHex = 0x020617;
-      hemiInt = 0.32;
-      starsAlpha = 0.92;
-    } else {
-      // --- AMANHECER (5:00 - 8.5) ---
-      colZenith = '#1e3a8a';
-      colMid = '#c026d3';
-      colHorizon = '#f59e0b';
-      colGround = '#1e293b';
-      fogHex = 0xf59e0b;
-      fogDensity = 0.0020;
-      expVal = 1.12;
-
-      sunColorHex = 0xffedd5;
-      sunInt = 2.0;
-      hemiSkyHex = 0xfde047;
-      hemiGroundHex = 0x1e293b;
-      hemiInt = 0.88;
-      starsAlpha = 0.15;
-    }
-
-    // Desenha gradiente equirretangular vertical (Zenith = y:0, Horizonte = y:128, Nadir/Chão = y:256)
+  drawSkyAndClouds(ctx, w, h, palette) {
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0.00, colZenith);
-    grad.addColorStop(0.38, colMid);
-    grad.addColorStop(0.50, colHorizon);
-    grad.addColorStop(0.53, colGround);
-    grad.addColorStop(1.00, colGround);
+    grad.addColorStop(0.00, palette.colZenith);
+    grad.addColorStop(0.35, palette.colMid);
+    grad.addColorStop(0.50, palette.colHorizon);
+    grad.addColorStop(0.515, palette.colGround);
+    grad.addColorStop(1.00, palette.colGround);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    if (elev > -0.10) {
-      const u = (Math.atan2(this.sunDir.z, this.sunDir.x) / (Math.PI * 2) + 0.5) * w;
-      const v = (0.5 - Math.asin(Math.max(-0.99, Math.min(0.99, this.sunDir.y))) / Math.PI) * h;
-      const sunGlow = ctx.createRadialGradient(u, v, 2, u, v, 42);
-      sunGlow.addColorStop(0.0, 'rgba(255, 255, 255, 0.95)');
-      sunGlow.addColorStop(0.3, hour > 16.0 ? 'rgba(255, 120, 40, 0.75)' : 'rgba(255, 240, 180, 0.70)');
-      sunGlow.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
-      ctx.fillStyle = sunGlow;
+    // Desenha nuvens procedurais suaves (dão profundidade ao céu e deslizando sobre o capô/teto nos reflexos!)
+    for (let i = 0; i < this.clouds.length; i++) {
+      const c = this.clouds[i];
+      const cx = c.u * w;
+      const cy = c.v * h;
+      const rx = c.rx * w;
+      const ry = c.ry * h;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(1, ry / rx);
+      const cGrad = ctx.createRadialGradient(0, 0, rx * 0.1, 0, 0, rx);
+      cGrad.addColorStop(0.0, `rgba(${palette.cloudRgb}, ${c.alpha})`);
+      cGrad.addColorStop(0.55, `rgba(${palette.cloudRgb}, ${c.alpha * 0.45})`);
+      cGrad.addColorStop(1.0, `rgba(${palette.cloudRgb}, 0.0)`);
+      ctx.fillStyle = cGrad;
       ctx.beginPath();
-      ctx.arc(u, v, 42, 0, Math.PI * 2);
+      ctx.arc(0, 0, rx, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  renderSkyEquirectangular(hour, elev) {
+    let palette;
+
+    if (hour >= 8.5 && hour <= 16.0) {
+      // --- DIA (12:00): Céu azul vívido, luz solar natural sem estourar o branco ---
+      palette = {
+        colZenith: '#0f3c91',
+        colMid: '#2563eb',
+        colHorizon: '#7dd3fc',
+        colGround: '#1b2028',
+        cloudRgb: '255, 255, 255',
+        buildingCol: '#1e293b',
+        fogHex: 0x8ec5ea,
+        fogDensity: 0.0011,
+        expVal: 0.90,
+        sunColorHex: 0xfff5e0,
+        sunInt: 1.65,
+        hemiSkyHex: 0x7dd3fc,
+        hemiGroundHex: 0x27272a,
+        hemiInt: 0.42,
+        starsAlpha: 0.0,
+        isNight: false
+      };
+    } else if (hour > 16.0 && hour < 19.5) {
+      // --- PÔR DO SOL / GOLDEN HOUR (17:45): Âmbar dourado e azul crepuscular, ZERO rosa/roxo ---
+      const t = (hour - 16.0) / 3.5;
+      palette = {
+        colZenith: '#1b3554',
+        colMid: '#b85d28',
+        colHorizon: '#f59e0b',
+        colGround: '#16181e',
+        cloudRgb: '253, 186, 116',
+        buildingCol: '#171923',
+        fogHex: 0xc97b42,
+        fogDensity: 0.0014,
+        expVal: 0.96,
+        sunColorHex: 0xffa94d,
+        sunInt: 1.80,
+        hemiSkyHex: 0xf59e0b,
+        hemiGroundHex: 0x262322,
+        hemiInt: 0.38,
+        starsAlpha: t * 0.30,
+        isNight: false
+      };
+    } else if (hour >= 19.5 || hour < 5.0) {
+      // --- NOITE PROFUNDA COM LUAR (22:30) ---
+      palette = {
+        colZenith: '#020617',
+        colMid: '#091020',
+        colHorizon: '#131c31',
+        colGround: '#030508',
+        cloudRgb: '51, 65, 85',
+        buildingCol: '#04070e',
+        fogHex: 0x090e1a,
+        fogDensity: 0.0022,
+        expVal: 1.18,
+        sunColorHex: 0x93c5fd,
+        sunInt: 0.45,
+        hemiSkyHex: 0x1e293b,
+        hemiGroundHex: 0x030508,
+        hemiInt: 0.30,
+        starsAlpha: 0.92,
+        isNight: true
+      };
     } else {
-      const u = (Math.atan2(this.moonDir.z, this.moonDir.x) / (Math.PI * 2) + 0.5) * w;
-      const v = (0.5 - Math.asin(Math.max(-0.99, Math.min(0.99, this.moonDir.y))) / Math.PI) * h;
-      const moonGlow = ctx.createRadialGradient(u, v, 2, u, v, 32);
-      moonGlow.addColorStop(0.0, 'rgba(230, 245, 255, 0.85)');
-      moonGlow.addColorStop(0.4, 'rgba(160, 205, 255, 0.40)');
+      // --- AMANHECER (5:00 - 8:30): Dourado suave e azul matinal ---
+      palette = {
+        colZenith: '#1e3a6e',
+        colMid: '#d97736',
+        colHorizon: '#fcd34d',
+        colGround: '#1b2028',
+        cloudRgb: '254, 215, 170',
+        buildingCol: '#1c2432',
+        fogHex: 0xdba063,
+        fogDensity: 0.0014,
+        expVal: 0.94,
+        sunColorHex: 0xffe4b5,
+        sunInt: 1.55,
+        hemiSkyHex: 0xfdba74,
+        hemiGroundHex: 0x1e242d,
+        hemiInt: 0.42,
+        starsAlpha: 0.12,
+        isNight: false
+      };
+    }
+
+    // 1) Renderiza Fundo do Céu limpo (scene.background)
+    const bgW = this.skyBgCanvas.width;
+    const bgH = this.skyBgCanvas.height;
+    this.drawSkyAndClouds(this.skyBgCtx, bgW, bgH, palette);
+    this.skyBgTexture.needsUpdate = true;
+
+    // 2) Renderiza Mapa de Reflexos de Alto Contraste (scene.environment via PMREM)
+    const ew = this.envCanvas.width;
+    const eh = this.envCanvas.height;
+    const eCtx = this.envCtx;
+    this.drawSkyAndClouds(eCtx, ew, eh, palette);
+
+    // Silhueta urbana 360° na linha do horizonte do mapa de reflexão (dá reflexos nítidos nas portas e vidros!)
+    eCtx.fillStyle = palette.buildingCol;
+    const horizonY = eh * 0.50;
+    for (let i = 0; i < this.skylineBuildings.length; i++) {
+      const b = this.skylineBuildings[i];
+      const bx = b.x * ew;
+      const bw = b.w * ew;
+      const bh = b.h * eh;
+      eCtx.fillRect(bx, horizonY - bh, bw, bh + 3);
+      if (palette.isNight && b.lit) {
+        eCtx.fillStyle = 'rgba(253, 224, 71, 0.55)';
+        eCtx.fillRect(bx + bw * 0.25, horizonY - bh * 0.75, Math.max(1.5, bw * 0.45), Math.max(1.5, bh * 0.18));
+        eCtx.fillStyle = palette.buildingCol;
+      }
+    }
+
+    // Faixas sutis de reflexo do asfalto abaixo do horizonte
+    eCtx.fillStyle = palette.isNight ? 'rgba(148, 163, 184, 0.08)' : 'rgba(255, 255, 255, 0.09)';
+    eCtx.fillRect(0, horizonY + eh * 0.08, ew, eh * 0.015);
+    eCtx.fillRect(0, horizonY + eh * 0.20, ew, eh * 0.02);
+
+    // Brilho especular intenso do Sol ou Lua no mapa de reflexão
+    if (elev > -0.10) {
+      const u = (Math.atan2(this.sunDir.z, this.sunDir.x) / (Math.PI * 2) + 0.5) * ew;
+      const v = (0.5 - Math.asin(Math.max(-0.99, Math.min(0.99, this.sunDir.y))) / Math.PI) * eh;
+      const sunGlow = eCtx.createRadialGradient(u, v, 2, u, v, ew * 0.08);
+      sunGlow.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+      sunGlow.addColorStop(0.28, hour > 16.0 ? 'rgba(255, 180, 90, 0.85)' : 'rgba(255, 250, 220, 0.85)');
+      sunGlow.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+      eCtx.fillStyle = sunGlow;
+      eCtx.beginPath();
+      eCtx.arc(u, v, ew * 0.08, 0, Math.PI * 2);
+      eCtx.fill();
+    } else {
+      const u = (Math.atan2(this.moonDir.z, this.moonDir.x) / (Math.PI * 2) + 0.5) * ew;
+      const v = (0.5 - Math.asin(Math.max(-0.99, Math.min(0.99, this.moonDir.y))) / Math.PI) * eh;
+      const moonGlow = eCtx.createRadialGradient(u, v, 2, u, v, ew * 0.05);
+      moonGlow.addColorStop(0.0, 'rgba(230, 245, 255, 0.90)');
+      moonGlow.addColorStop(0.45, 'rgba(160, 205, 255, 0.40)');
       moonGlow.addColorStop(1.0, 'rgba(160, 205, 255, 0.0)');
-      ctx.fillStyle = moonGlow;
-      ctx.beginPath();
-      ctx.arc(u, v, 32, 0, Math.PI * 2);
-      ctx.fill();
+      eCtx.fillStyle = moonGlow;
+      eCtx.beginPath();
+      eCtx.arc(u, v, ew * 0.05, 0, Math.PI * 2);
+      eCtx.fill();
     }
 
-    this.skyTexture.needsUpdate = true;
+    this.envTexture.needsUpdate = true;
 
-    // Atualiza PMREM e IBL na cena para reflexos PBR em tempo real na lataria e vidros
-    const renderTarget = this.pmremGenerator.fromEquirectangular(this.skyTexture);
-    if (this.prevRenderTarget) {
-      this.prevRenderTarget.dispose();
+    // Atualiza PMREM e IBL conforme qualidade gráfica
+    if (this.graphicsPreset.reflections === 'off') {
+      this.scene.environment = null;
+    } else {
+      const renderTarget = this.pmremGenerator.fromEquirectangular(this.envTexture);
+      if (this.prevRenderTarget) {
+        this.prevRenderTarget.dispose();
+      }
+      this.prevRenderTarget = renderTarget;
+      this.scene.environment = renderTarget.texture;
     }
-    this.prevRenderTarget = renderTarget;
-    this.scene.environment = renderTarget.texture;
-    this.scene.background = this.skyTexture;
+
+    this.scene.background = this.skyBgTexture;
 
     // Atualiza iluminação da cena
-    this.sunLight.color.setHex(sunColorHex);
-    this.sunLight.intensity = sunInt;
-    this.hemiLight.color.setHex(hemiSkyHex);
-    this.hemiLight.groundColor.setHex(hemiGroundHex);
-    this.hemiLight.intensity = hemiInt;
+    this.sunLight.color.setHex(palette.sunColorHex);
+    this.sunLight.intensity = palette.sunInt;
+    this.hemiLight.color.setHex(palette.hemiSkyHex);
+    this.hemiLight.groundColor.setHex(palette.hemiGroundHex);
+    this.hemiLight.intensity = palette.hemiInt;
 
-    // Atualiza atmosfera (Névoa e Exposição do Tone Mapping)
+    // Atualiza atmosfera (Névoa e Exposição)
+    this.currentFogDensity = palette.fogDensity;
     if (this.scene.fog) {
-      this.scene.fog.color.setHex(fogHex);
-      this.scene.fog.density = fogDensity;
+      this.scene.fog.color.setHex(palette.fogHex);
+      this.scene.fog.density = palette.fogDensity * (this.graphicsPreset.fogMult || 1.0);
     }
-    this.renderer.toneMappingExposure = expVal;
+    this.renderer.toneMappingExposure = palette.expVal;
 
-    // Atualiza estrelas
+    // Atualiza estrelas e corpos celestes
     if (this.starfield && this.starfield.material) {
-      this.starfield.material.opacity = starsAlpha;
-      this.starfield.visible = starsAlpha > 0.01;
+      this.starfield.material.opacity = palette.starsAlpha;
+      this.starfield.visible = palette.starsAlpha > 0.01;
     }
 
-    // Visibilidade dos corpos celestes
     this.sunSprite.visible = elev > -0.15;
     this.moonSprite.visible = elev < 0.25;
 
     this.lastPmremHour = hour;
+  }
+
+  setGraphicsPreset(preset) {
+    this.graphicsPreset = preset;
+    if (this.envCanvas.width !== preset.envResolution[0] || this.envCanvas.height !== preset.envResolution[1]) {
+      this.envCanvas.width = preset.envResolution[0];
+      this.envCanvas.height = preset.envResolution[1];
+    }
+    const { elev } = this.calcCelestialVectors(this.hour);
+    this.renderSkyEquirectangular(this.hour, elev);
+  }
+
+  updateRealtimeCubeReflection(carPos) {
+    if (!this.graphicsPreset.realtimeCube || !corsaChassisVisual || !carPos) return;
+
+    this.cubeCamera.position.set(carPos.x, carPos.y + 0.45, carPos.z);
+    this.cubeCamera.updateMatrixWorld();
+
+    corsaChassisVisual.visible = false;
+    corsaWheelVisuals.forEach((wg) => { wg.visible = false; });
+
+    const prevTarget = this.renderer.getRenderTarget();
+    const prevXr = this.renderer.xr.enabled;
+    const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
+    this.renderer.xr.enabled = false;
+    this.renderer.shadowMap.autoUpdate = false;
+
+    // Renderiza 1 face por quadro para manter FPS elevado mesmo no ULTRA
+    const faceCam = this.cubeCamera.children[this.cubeFaceIdx];
+    this.renderer.setRenderTarget(this.cubeRenderTarget, this.cubeFaceIdx);
+    this.renderer.clear();
+    this.renderer.render(this.scene, faceCam);
+
+    this.renderer.setRenderTarget(prevTarget);
+    this.renderer.xr.enabled = prevXr;
+    this.renderer.shadowMap.autoUpdate = prevShadowAuto;
+
+    corsaChassisVisual.visible = true;
+    corsaWheelVisuals.forEach((wg) => { wg.visible = true; });
+
+    this.cubeFaceIdx = (this.cubeFaceIdx + 1) % 6;
+
+    if (this.cubeFaceIdx === 0) {
+      const pmremRT = this.pmremGenerator.fromCubemap(this.cubeRenderTarget.texture);
+      if (this.prevCarCubePmrem) {
+        this.prevCarCubePmrem.dispose();
+      }
+      this.prevCarCubePmrem = pmremRT;
+      const tex = pmremRT.texture;
+      corsaReflectiveMaterials.paint.forEach((m) => { m.envMap = tex; });
+      corsaReflectiveMaterials.glass.forEach((m) => { m.envMap = tex; });
+      corsaReflectiveMaterials.chrome.forEach((m) => { m.envMap = tex; });
+    }
   }
 
   update(dt, carPos) {
@@ -1771,6 +2077,10 @@ class EnvironmentTimeSystem {
 
     if (this.starfield && this.starfield.visible) {
       this.starfield.rotation.y += dt * 0.002;
+    }
+
+    if (this.graphicsPreset.realtimeCube && state.started) {
+      this.updateRealtimeCubeReflection(carPos);
     }
   }
 
@@ -1861,6 +2171,96 @@ function cycleTimeOfDay() {
   }
 }
 
+function applyGraphicsQuality(qualityKey) {
+  const preset = GRAPHICS_PRESETS[qualityKey] || GRAPHICS_PRESETS.high;
+  state.graphicsQuality = preset.key;
+
+  try {
+    localStorage.setItem('corsa3d_graphics', preset.key);
+  } catch (e) {}
+
+  // 1. Resolução e Pixel Ratio
+  renderer.setPixelRatio(preset.pixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  // 2. Sombras Dinâmicas
+  renderer.shadowMap.enabled = preset.shadows;
+  renderer.shadowMap.type = preset.shadowType;
+  sunLight.castShadow = preset.shadows;
+
+  if (sunLight.shadow.mapSize.width !== preset.shadowSize ||
+      sunLight.shadow.camera.right !== preset.shadowDist) {
+    sunLight.shadow.mapSize.set(preset.shadowSize, preset.shadowSize);
+    sunLight.shadow.camera.left = -preset.shadowDist;
+    sunLight.shadow.camera.right = preset.shadowDist;
+    sunLight.shadow.camera.top = preset.shadowDist;
+    sunLight.shadow.camera.bottom = -preset.shadowDist;
+    sunLight.shadow.camera.updateProjectionMatrix();
+    if (sunLight.shadow.map) {
+      sunLight.shadow.map.dispose();
+      sunLight.shadow.map = null;
+    }
+  }
+
+  // 3. Distância de renderização
+  camera.far = preset.cameraFar;
+  camera.updateProjectionMatrix();
+
+  // 4. Partículas de fumaça
+  smokeSystem.setActiveLimit(preset.maxSmokeParticles);
+
+  // 5. Materiais do Corsa (Clearcoat & Intensidade de Reflexo)
+  const paintEnvInt = preset.reflections === 'off' ? 0.0 : preset.reflections === 'sky' ? 1.15 : preset.key === 'ultra' ? 2.1 : 1.9;
+  const glassEnvInt = preset.reflections === 'off' ? 0.0 : preset.reflections === 'sky' ? 1.3 : 2.3;
+  const chromeEnvInt = preset.reflections === 'off' ? 0.0 : preset.reflections === 'sky' ? 1.2 : 1.95;
+
+  corsaReflectiveMaterials.paint.forEach((m) => {
+    m.clearcoat = preset.clearcoat ? 1.0 : 0.0;
+    m.clearcoatRoughness = preset.key === 'ultra' ? 0.02 : 0.035;
+    m.envMapIntensity = paintEnvInt;
+    if (!preset.realtimeCube) m.envMap = null;
+    m.needsUpdate = true;
+  });
+  corsaReflectiveMaterials.glass.forEach((m) => {
+    m.clearcoat = preset.clearcoat ? 1.0 : 0.0;
+    m.envMapIntensity = glassEnvInt;
+    if (!preset.realtimeCube) m.envMap = null;
+    m.needsUpdate = true;
+  });
+  corsaReflectiveMaterials.chrome.forEach((m) => {
+    m.envMapIntensity = chromeEnvInt;
+    if (!preset.realtimeCube) m.envMap = null;
+    m.needsUpdate = true;
+  });
+
+  // 6. Ambiente & PMREM
+  if (envTimeSystem) {
+    envTimeSystem.setGraphicsPreset(preset);
+  }
+
+  // 7. Atualiza UI e badges
+  const gfxLabel = document.getElementById('graphics-label');
+  const startBadge = document.getElementById('start-graphics-badge');
+  const mGfxTxt = document.getElementById('m-graphics-txt');
+  if (gfxLabel) gfxLabel.textContent = preset.label;
+  if (startBadge) startBadge.textContent = preset.label;
+  if (mGfxTxt) mGfxTxt.textContent = preset.label;
+
+  document.querySelectorAll('.gfx-preset-card').forEach((card) => {
+    card.classList.toggle('active', card.dataset.quality === preset.key);
+  });
+}
+
+function toggleGraphicsModal(forceOpen) {
+  const modal = document.getElementById('graphics-modal');
+  if (!modal) return;
+  const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : modal.classList.contains('hud-hidden');
+  state.graphicsMenuOpen = shouldOpen;
+  modal.classList.toggle('hud-hidden', !shouldOpen);
+  if (shouldOpen) {
+    releaseAllInputs();
+  }
+}
 // Mundo Físico Cannon-es
 const world = new CANNON.World();
 world.gravity.set(0, -9.81, 0);
@@ -2008,6 +2408,7 @@ async function initSimulation() {
     carAudio.setupNodes(corsaChassisVisual);
 
     setupCorsaPhysics(splitResult.chassisComOffsetY);
+    applyGraphicsQuality(state.graphicsQuality);
 
     state.loaded = true;
     updateLoadingProgress(100);
@@ -2985,7 +3386,11 @@ function cycleCameraMode() {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (!state.started) return;
+  if (!state.started) {
+    if (e.key.toLowerCase() === 'g' && !e.repeat) toggleGraphicsModal();
+    if (e.key === 'Escape' && state.graphicsMenuOpen) toggleGraphicsModal(false);
+    return;
+  }
   const k = e.key.toLowerCase();
 
   if (k === 'w' || e.key === 'ArrowUp') keys.w = true;
@@ -3010,6 +3415,10 @@ window.addEventListener('keydown', (e) => {
       toggleHeadlights();
     } else if (k === 'h') {
       cycleTimeOfDay();
+    } else if (k === 'g') {
+      toggleGraphicsModal();
+    } else if (e.key === 'Escape' && state.graphicsMenuOpen) {
+      toggleGraphicsModal(false);
     } else if (k === 'i') {
       toggleEngineIgnition();
     } else if (k === 'c') {
@@ -3421,7 +3830,34 @@ function animate(now) {
   renderer.render(scene, camera);
 }
 
+function setupGraphicsControls() {
+  document.getElementById('btn-graphics')?.addEventListener('click', () => toggleGraphicsModal());
+  document.getElementById('start-graphics-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleGraphicsModal(true);
+  });
+  document.getElementById('mbtn-graphics')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleGraphicsModal();
+  });
+  document.getElementById('close-graphics-btn')?.addEventListener('click', () => toggleGraphicsModal(false));
+  document.getElementById('confirm-graphics-btn')?.addEventListener('click', () => toggleGraphicsModal(false));
+  document.getElementById('graphics-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'graphics-modal') toggleGraphicsModal(false);
+  });
+
+  document.querySelectorAll('.gfx-preset-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const q = card.dataset.quality;
+      if (q) applyGraphicsQuality(q);
+    });
+  });
+
+  applyGraphicsQuality(state.graphicsQuality);
+}
+
 initSimulation();
 setupMobileControls();
 setupTurboControls();
+setupGraphicsControls();
 requestAnimationFrame(animate);
