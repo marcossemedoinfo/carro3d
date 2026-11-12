@@ -95,6 +95,7 @@ const state = {
   startingEngine: false,
   headlightsOn: false,    // Faróis dianteiros e lanternas traseiras (Tecla L ou botão HUD)
   turboInstalled: false,  // Kit Turbo com espirro de alívio nas trocas de marcha e torque extra
+  turboBoost: 0.0,        // Pressão atual da turbina: 0.0 (sem pressão) a 1.0 (turbo cheio / 1.5 bar)
   transmission: 'MANUAL', // 'MANUAL' ou 'AUTO'
   gear: 1,                // -1 = R, 0 = N, 1..5 = 1ª a 5ª marcha
   shiftCooldown: 0,
@@ -282,12 +283,75 @@ class SpatialCarAudio {
       this.sources.turbo.setBuffer(this.rawBuffers.turbo);
       this.sources.turbo.setLoop(false);
     }
+    this.sources.turboWhistle = this.createPositionalNode(this.engineAnchor, 3.0, 90);
+  }
+
+  initTurboWhistleSynth() {
+    if (this.turboWhistleInitialized) return;
+    this.turboWhistleInitialized = true;
+
+    try {
+      // [1] Oscilador senoidal puro (agudo característico da turbina)
+      this.turboOsc = this.ctx.createOscillator();
+      this.turboOsc.type = 'sine';
+      this.turboOsc.frequency.setValueAtTime(1100, this.ctx.currentTime);
+
+      // [2] Segundo oscilador (harmônico superior metálico)
+      this.turboHarmonic = this.ctx.createOscillator();
+      this.turboHarmonic.type = 'triangle';
+      this.turboHarmonic.frequency.setValueAtTime(2200, this.ctx.currentTime);
+      const harmonicGain = this.ctx.createGain();
+      harmonicGain.gain.setValueAtTime(0.18, this.ctx.currentTime);
+      this.turboHarmonic.connect(harmonicGain);
+
+      // [3] Gerador de fluxo de ar aspirado (ruído dinâmico filtrado em passa-faixa)
+      const bufferSize = Math.floor(this.ctx.sampleRate * 2);
+      const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.35;
+      }
+      this.turboNoise = this.ctx.createBufferSource();
+      this.turboNoise.buffer = noiseBuffer;
+      this.turboNoise.loop = true;
+
+      this.turboFilter = this.ctx.createBiquadFilter();
+      this.turboFilter.type = 'bandpass';
+      this.turboFilter.Q.setValueAtTime(5.5, this.ctx.currentTime);
+      this.turboFilter.frequency.setValueAtTime(1400, this.ctx.currentTime);
+
+      const noiseGain = this.ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.38, this.ctx.currentTime);
+      this.turboNoise.connect(noiseGain);
+      noiseGain.connect(this.turboFilter);
+
+      // Ganho mestre do assovio do turbo
+      this.turboMasterGain = this.ctx.createGain();
+      this.turboMasterGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
+
+      this.turboOsc.connect(this.turboMasterGain);
+      harmonicGain.connect(this.turboMasterGain);
+      this.turboFilter.connect(this.turboMasterGain);
+
+      // Conecta no Three.js PositionalAudio ancorado no cofre do motor
+      if (this.sources.turboWhistle && this.sources.turboWhistle.gain) {
+        this.turboMasterGain.connect(this.sources.turboWhistle.gain);
+      }
+
+      this.turboOsc.start();
+      this.turboHarmonic.start();
+      this.turboNoise.start();
+    } catch (err) {
+      console.warn('Erro ao inicializar sintetizador de assovio do turbo:', err);
+    }
   }
 
   startContinuousLoops() {
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
     }
+
+    this.initTurboWhistleSynth();
 
     this.startSlicedLoop(this.sources.engineIdle, this.slicedBuffers.idle);
     this.startSlicedLoop(this.sources.engineLoad, this.slicedBuffers.midLoad);
@@ -356,6 +420,9 @@ class SpatialCarAudio {
         s.gain.gain.setTargetAtTime(0.0, now, 0.08);
       }
     });
+    if (this.turboMasterGain) {
+      this.turboMasterGain.gain.setTargetAtTime(0.0, now, 0.05);
+    }
   }
 
   update() {
@@ -372,6 +439,25 @@ class SpatialCarAudio {
     if (!state.engineOn) {
       this.shutDownEngine();
       return;
+    }
+
+    // ========================================================================
+    // ASSOVIO DO TURBO ENCHENDO AOS POUCOS (PITCH E VOLUME DINÂMICOS)
+    // ========================================================================
+    if (this.turboMasterGain) {
+      if (state.engineOn && state.turboInstalled && state.turboBoost > 0.02) {
+        // Conforme a turbina enche (0.0 a 1.0), o tom sobe de 1.100 Hz até 3.300 Hz
+        const basePitchHz = 1100 + state.turboBoost * 2100 + (state.rpm / CORSA_SPECS.MaxRPM) * 400;
+        this.turboOsc.frequency.setTargetAtTime(basePitchHz, now, 0.04);
+        this.turboHarmonic.frequency.setTargetAtTime(basePitchHz * 1.5, now, 0.04);
+        this.turboFilter.frequency.setTargetAtTime(basePitchHz * 1.05, now, 0.04);
+
+        // O volume aumenta progressivamente com a pressão do turbo
+        const boostVol = Math.pow(state.turboBoost, 1.25) * 0.46 * (0.35 + state.throttleInput * 0.65);
+        this.turboMasterGain.gain.setTargetAtTime(boostVol, now, 0.035);
+      } else {
+        this.turboMasterGain.gain.setTargetAtTime(0.0, now, 0.03);
+      }
     }
 
     const rpmNorm = THREE.MathUtils.clamp((state.rpm - CORSA_SPECS.IdleRPM) / (CORSA_SPECS.MaxRPM - CORSA_SPECS.IdleRPM), 0, 1);
@@ -519,6 +605,9 @@ const CAMERA_MODE_NAMES = ['PERSEGUIÇÃO', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓR
 // Dispara o espirro da válvula de alívio do turbo (áudio posicional 3D no motor + vapor sutil sob o capô)
 function triggerTurboBlowOff() {
   if (!state.turboInstalled) return;
+  // A válvula de alívio SÓ espirra se o turbo estiver cheio (pressão acumulada >= 0.65)!
+  if (state.turboBoost < 0.65) return;
+
   carAudio.playTurboBlowOff();
 
   if (smokeSystem && carAudio && carAudio.engineAnchor) {
@@ -527,21 +616,24 @@ function triggerTurboBlowOff() {
     tempBayPos.y += 0.14 * CAR_SCALE;
     tempBayPos.z -= 0.16 * CAR_SCALE;
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       const puffVel = new THREE.Vector3(
-        (Math.random() - 0.5) * 0.45,
-        0.30 + Math.random() * 0.35,
-        -0.85 - Math.random() * 0.5
+        (Math.random() - 0.5) * 0.55,
+        0.35 + Math.random() * 0.40,
+        -0.95 - Math.random() * 0.60
       );
       smokeSystem.spawn(tempBayPos, puffVel, {
-        startScale: 0.12,
-        endScale: 0.65,
-        opacity: 0.42,
-        maxAge: 0.45,
+        startScale: 0.14,
+        endScale: 0.75,
+        opacity: 0.46,
+        maxAge: 0.50,
         colorHex: 0xf8fafc
       });
     }
   }
+
+  // Ao espirrar, a válvula de alívio despressuriza o sistema de admissão
+  state.turboBoost = 0.05;
 }
 
 function splitCorsaModelIntoChassisAndWheels(gltfScene) {
@@ -1598,29 +1690,6 @@ function updateVehiclePhysicsAndEffects(dt) {
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer > 0 ? 1.04 : 0.96), 0); // FL
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer < 0 ? 1.04 : 0.96), 1); // FR
 
-  // ==========================================================================
-  // FREIO DE MÃO MECÂNICO REALISTA (SIMULAÇÃO FÍSICA NATURAL SEM SCRIPTS)
-  // ==========================================================================
-  const isHandbraking = state.handbrakeInput > 0.5;
-
-  if (isHandbraking) {
-    // Na vida real, o freio de mão mecânico atua exclusivamente travando as rodas traseiras.
-    // O pneu traseiro travado passa de atrito estático (1.65) para atrito cinético de deslizamento (1.15).
-    // As rodas dianteiras continuam rolando e esterçando com aderência total (1.65).
-    // Pela pura lei da inércia, a traseira solta de forma suave e realista, sem força nem script artificial!
-    vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
-    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
-  } else {
-    // Condução normal: as 4 rodas têm 100% de aderência integral no asfalto (1.65)
-    // O carro faz a curva colado no chão, sem derrapagens forçadas
-    vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-  }
-
   if (state.shiftCooldown > 0) state.shiftCooldown = Math.max(0, state.shiftCooldown - dt);
 
   // Escalonamento de velocidades máximas por marcha (20, 50, 90, 120, 180 km/h)
@@ -1671,6 +1740,73 @@ function updateVehiclePhysicsAndEffects(dt) {
     }
   }
 
+  // ==========================================================================
+  // TURBOCOMPRESSOR PROGRESSIVO (SPOOL-UP AOS POUCOS, ASSOVIO E PRESSÃO DE 0 A 1.5 BAR)
+  // ==========================================================================
+  if (state.turboInstalled && state.engineOn) {
+    // Para encher a turbina aos poucos, precisa de giro (>2.100 RPM), acelerador e marcha engatada
+    const hasEngineLoad = state.gear !== 0 && state.throttleInput > 0.25;
+    const rpmSpoolRatio = THREE.MathUtils.clamp((state.rpm - 2100) / 3400, 0, 1);
+
+    if (hasEngineLoad && rpmSpoolRatio > 0) {
+      // Pressão alvo proporcional ao pedal do acelerador e à rotação do motor
+      const targetBoost = THREE.MathUtils.clamp(state.throttleInput * (0.35 + rpmSpoolRatio * 0.70), 0, 1.0);
+      const spoolRate = 0.82 + rpmSpoolRatio * 0.60;
+      if (targetBoost > state.turboBoost) {
+        state.turboBoost = Math.min(1.0, state.turboBoost + dt * spoolRate);
+      } else {
+        // Reduz pressão se aliviar o pé
+        state.turboBoost = Math.max(0.0, state.turboBoost - dt * 1.8);
+      }
+    } else {
+      // Se tirar o pé bruscamente com o turbo cheio (>= 0.65), a válvula de alívio espirra imediatamente!
+      if (state.turboBoost >= 0.65 && state.throttleInput < 0.20 && state.shiftCooldown <= 0) {
+        triggerTurboBlowOff();
+      } else {
+        // Esvazia gradualmente quando sem carga
+        state.turboBoost = Math.max(0.0, state.turboBoost - dt * 2.6);
+      }
+    }
+  } else {
+    state.turboBoost = 0.0;
+  }
+
+  const isTurboFull = state.turboInstalled && state.turboBoost >= 0.82;
+  const isFrontWheelSpinningTurbo =
+    isTurboFull &&
+    state.throttleInput > 0.65 &&
+    state.gear >= 1 &&
+    state.gear <= 3 &&
+    state.speedKmh < 95;
+
+  // ==========================================================================
+  // FREIO DE MÃO MECÂNICO REALISTA & DESTRACIONAMENTO FRONTAL POR TURBO CHEIO
+  // ==========================================================================
+  const isHandbraking = state.handbrakeInput > 0.5;
+
+  if (isHandbraking) {
+    // Na vida real, o freio de mão mecânico atua exclusivamente travando as rodas traseiras.
+    // O pneu traseiro travado passa de atrito estático (1.65) para atrito cinético de deslizamento (1.15).
+    // As rodas dianteiras continuam rolando e esterçando com aderência total (1.65).
+    vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
+    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
+  } else if (isFrontWheelSpinningTurbo) {
+    // SÓ QUANDO O TURBO ENCHER: o carro destraciona a frente violentamente!
+    // Pneus dianteiros perdem tração de atrito estático (1.65) e passam a queimar no asfalto (0.72)
+    vehicle.wheelInfos[0].frictionSlip = 0.72;
+    vehicle.wheelInfos[1].frictionSlip = 0.72;
+    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+  } else {
+    // Condução normal: as 4 rodas têm 100% de aderência integral no asfalto (1.65)
+    vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+  }
+
   // Curva de Torque Realista + Limitador Físico de Velocidade por Marcha
   const rpmNorm = THREE.MathUtils.clamp((state.rpm - 800) / 5800, 0, 1);
   const torqueCurve = 0.55 + 0.45 * Math.sin(rpmNorm * Math.PI * 0.85);
@@ -1686,7 +1822,19 @@ function updateVehiclePhysicsAndEffects(dt) {
       speedLimiterFactor = (maxGearSpeedKmh - state.speedKmh) / 2.5;
     }
 
-    const turboBoostFactor = state.turboInstalled ? 1.25 : 1.0;
+    // Curva de potência do Turbo:
+    // Sem turbo: 1.0x
+    // Turbo enchendo: ganho gradual de 1.0x a 1.25x
+    // Turbo CHEIO (>= 0.82): EXPLOSÃO DE POTÊNCIA (1.95x de torque!)
+    let turboBoostFactor = 1.0;
+    if (state.turboInstalled) {
+      if (isTurboFull) {
+        turboBoostFactor = 1.95; // Muita potência quando o turbo enche!
+      } else {
+        turboBoostFactor = 1.0 + state.turboBoost * 0.30;
+      }
+    }
+
     wheelDriveForce = state.throttleInput * baseGearForce * torqueCurve * speedLimiterFactor * turboBoostFactor;
 
     if (state.speedKmh > maxGearSpeedKmh + 1.5) {
@@ -1759,6 +1907,10 @@ function updateVehiclePhysicsAndEffects(dt) {
     if (i < 2 && state.engineOn && state.gear === 1 && state.throttleInput > 0.85 && state.speedKmh < 10) {
       wOmega += state.throttleInput * 7.0;
     }
+    // SÓ QUANDO O TURBO ENCHER: Rodas dianteiras giram destracionando em altíssima rotação!
+    if (i < 2 && isFrontWheelSpinningTurbo) {
+      wOmega += 24.0 * state.turboBoost;
+    }
     wheelSpinAngles[i] -= wOmega * dt;
   }
 
@@ -1784,6 +1936,10 @@ function updateVehiclePhysicsAndEffects(dt) {
     let wSkid = 0;
     if (i < 2 && isFastLaunchBurnout) {
       wSkid = Math.max(wSkid, 0.78);
+    }
+    // SÓ QUANDO O TURBO ENCHER: as rodas dianteiras destracionam com fumaça intensa e borracha queimando
+    if (i < 2 && isFrontWheelSpinningTurbo) {
+      wSkid = Math.max(wSkid, 0.96);
     }
     if (isHardBrakingHighSpeed) {
       wSkid = Math.max(wSkid, THREE.MathUtils.clamp((state.speedKmh - 28) / 60, 0.50, 1.0));
@@ -1815,6 +1971,11 @@ function updateVehiclePhysicsAndEffects(dt) {
         colorHex: 0xdfe6ed
       });
     }
+  }
+
+  // Efeito sutil de vibração de torque-steer quando destraciona a frente com turbo cheio
+  if (isFrontWheelSpinningTurbo) {
+    chassisBody.angularVelocity.y += (Math.random() - 0.5) * 0.35 * dt * 60;
   }
 
   state.skidIntensity = THREE.MathUtils.lerp(state.skidIntensity, maxSkid, Math.min(1, dt * 12));
@@ -2018,6 +2179,26 @@ function drawTachometer() {
     tachoCtx.fillText(String(i), tx, ty);
   }
 
+  // Medidor interno de Pressão do Turbo (0.0 a 1.5 BAR)
+  if (state.turboInstalled) {
+    const rTurbo = 74;
+    tachoCtx.beginPath();
+    tachoCtx.arc(cx, cy, rTurbo, startAngle, endAngle);
+    tachoCtx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+    tachoCtx.lineWidth = 4;
+    tachoCtx.stroke();
+
+    if (state.turboBoost > 0.03) {
+      const turboAngle = startAngle + state.turboBoost * totalSweep;
+      tachoCtx.beginPath();
+      tachoCtx.arc(cx, cy, rTurbo, startAngle, turboAngle);
+      tachoCtx.strokeStyle = state.turboBoost >= 0.82 ? '#ef4444' : '#f59e0b';
+      tachoCtx.lineWidth = 5;
+      tachoCtx.lineCap = 'round';
+      tachoCtx.stroke();
+    }
+  }
+
   const needleAngle = rpmAngle;
   tachoCtx.save();
   tachoCtx.translate(cx, cy);
@@ -2045,6 +2226,9 @@ const hudDom = {
   barThrottle: document.getElementById('bar-throttle'),
   barBrake: document.getElementById('bar-brake'),
   barHandbrake: document.getElementById('bar-handbrake'),
+  barTurbo: document.getElementById('bar-turbo'),
+  turboPedalCol: document.getElementById('turbo-pedal-col'),
+  turboBarVal: document.getElementById('turbo-bar-val'),
   suspBars: ['fl', 'fr', 'rl', 'rr'].map((id) => document.getElementById(`susp-${id}`)),
   slipDots: ['fl', 'fr', 'rl', 'rr'].map((id) => document.getElementById(`slip-${id}`)),
   banner: document.getElementById('status-banner'),
@@ -2081,6 +2265,22 @@ function updateHUD() {
   if (hudDom.barBrake) hudDom.barBrake.style.height = `${Math.round(state.brakeInput * 100)}%`;
   if (hudDom.barHandbrake) hudDom.barHandbrake.style.height = `${Math.round(state.handbrakeInput * 100)}%`;
 
+  if (hudDom.barTurbo && hudDom.turboPedalCol) {
+    if (state.turboInstalled) {
+      hudDom.turboPedalCol.classList.remove('hud-hidden');
+      const boostPct = Math.round(state.turboBoost * 100);
+      hudDom.barTurbo.style.height = `${boostPct}%`;
+      const isFull = state.turboBoost >= 0.82;
+      hudDom.barTurbo.classList.toggle('full', isFull);
+      hudDom.turboPedalCol.classList.toggle('full', isFull);
+      if (hudDom.turboBarVal) {
+        hudDom.turboBarVal.textContent = isFull ? '1.5b 🔥' : `${(state.turboBoost * 1.5).toFixed(1)}b`;
+      }
+    } else {
+      hudDom.turboPedalCol.classList.add('hud-hidden');
+    }
+  }
+
   for (let idx = 0; idx < 4; idx++) {
     const suspBar = hudDom.suspBars[idx];
     const slipDot = hudDom.slipDots[idx];
@@ -2099,6 +2299,9 @@ function updateHUD() {
       banner.classList.remove('hud-hidden');
     } else if (state.handbrakeInput > 0.5 && state.speedKmh > 6) {
       banner.textContent = 'FREIO DE MÃO ACIONADO';
+      banner.classList.remove('hud-hidden');
+    } else if (state.turboInstalled && state.turboBoost >= 0.82 && (state.wheelSkids[0] > 0.60 || state.wheelSkids[1] > 0.60)) {
+      banner.textContent = '🔥 TURBO CHEIO (1.5 BAR) — FRENTE DESTRACIONANDO! 💨';
       banner.classList.remove('hud-hidden');
     } else {
       banner.classList.add('hud-hidden');
@@ -2134,12 +2337,38 @@ function updateHUD() {
 
   // Atualiza botões e indicadores do Turbo
   if (hudDom.turboLabel && hudDom.btnTurbo) {
-    hudDom.turboLabel.textContent = state.turboInstalled ? 'ON 🐌' : 'OFF';
-    hudDom.btnTurbo.classList.toggle('turbo-on', state.turboInstalled);
+    if (!state.turboInstalled) {
+      hudDom.turboLabel.textContent = 'OFF';
+      hudDom.btnTurbo.classList.remove('turbo-on', 'turbo-full');
+    } else if (state.turboBoost >= 0.82) {
+      hudDom.turboLabel.textContent = 'CHEIO! 🔥 1.5b';
+      hudDom.btnTurbo.classList.add('turbo-on', 'turbo-full');
+    } else if (state.turboBoost > 0.08) {
+      hudDom.turboLabel.textContent = `${(state.turboBoost * 1.5).toFixed(1)} BAR`;
+      hudDom.btnTurbo.classList.add('turbo-on');
+      hudDom.btnTurbo.classList.remove('turbo-full');
+    } else {
+      hudDom.turboLabel.textContent = 'ON (0.0b)';
+      hudDom.btnTurbo.classList.add('turbo-on');
+      hudDom.btnTurbo.classList.remove('turbo-full');
+    }
   }
   if (hudDom.mTurboTxt && hudDom.mBtnTurbo) {
-    hudDom.mTurboTxt.textContent = state.turboInstalled ? 'TURBO: ON' : 'TURBO: OFF';
-    hudDom.mBtnTurbo.classList.toggle('active', state.turboInstalled);
+    if (!state.turboInstalled) {
+      hudDom.mTurboTxt.textContent = 'TURBO: OFF';
+      hudDom.mBtnTurbo.classList.remove('active', 'turbo-full');
+    } else if (state.turboBoost >= 0.82) {
+      hudDom.mTurboTxt.textContent = 'TURBO: CHEIO 🔥';
+      hudDom.mBtnTurbo.classList.add('active', 'turbo-full');
+    } else if (state.turboBoost > 0.08) {
+      hudDom.mTurboTxt.textContent = `TURBO: ${(state.turboBoost * 1.5).toFixed(1)}b`;
+      hudDom.mBtnTurbo.classList.add('active');
+      hudDom.mBtnTurbo.classList.remove('turbo-full');
+    } else {
+      hudDom.mTurboTxt.textContent = 'TURBO: ON';
+      hudDom.mBtnTurbo.classList.add('active');
+      hudDom.mBtnTurbo.classList.remove('turbo-full');
+    }
   }
 }
 
@@ -2152,8 +2381,8 @@ function changeGear(newGear) {
     state.gear = clamped;
     state.shiftCooldown = 0.14;
 
-    // Se o kit turbo estiver instalado e o motor ligado, espirra a válvula de alívio nas trocas de marcha
-    if (state.turboInstalled && state.engineOn) {
+    // A válvula de alívio SÓ espirra nas trocas de marcha se o turbo estiver cheio (pressão acumulada >= 0.65)!
+    if (state.turboInstalled && state.engineOn && state.turboBoost >= 0.65) {
       triggerTurboBlowOff();
     }
   }
@@ -2200,6 +2429,9 @@ function toggleEngineIgnition() {
 
 function setTurboInstalled(enabled) {
   state.turboInstalled = enabled;
+  if (!enabled) {
+    state.turboBoost = 0.0;
+  }
   const toggleBtn = document.getElementById('turbo-toggle-btn');
   const badge = document.getElementById('turbo-badge');
   const hudBtn = document.getElementById('btn-turbo');
@@ -2219,11 +2451,6 @@ function setTurboInstalled(enabled) {
 
   if (mTxt) mTxt.textContent = enabled ? 'TURBO: ON' : 'TURBO: OFF';
   if (mBtn) mBtn.classList.toggle('active', enabled);
-
-  // Espirro de alívio instantâneo caso já esteja jogando com o motor ligado
-  if (enabled && state.started && state.engineOn) {
-    triggerTurboBlowOff();
-  }
 }
 
 function cycleCameraMode() {

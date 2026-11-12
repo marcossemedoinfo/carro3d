@@ -322,6 +322,18 @@ kbd {
   color: #f59e0b;
 }
 
+.hud-btn.turbo-full,
+.m-action-btn.turbo-full {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.75), inset 0 0 10px rgba(245, 158, 11, 0.45) !important;
+  animation: turboPulse 0.4s infinite alternate ease-in-out;
+}
+
+@keyframes turboPulse {
+  from { transform: scale(1.0); }
+  to { transform: scale(1.05); }
+}
+
 /* Status Banner */
 #status-banner {
   position: fixed;
@@ -402,6 +414,31 @@ kbd {
 
 .pedal-fill.handbrake {
   background: linear-gradient(180deg, #f59e0b, #d97706);
+}
+
+.pedal-fill.turbo {
+  background: linear-gradient(180deg, #f59e0b, #ef4444);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+
+.pedal-fill.turbo.full {
+  background: linear-gradient(180deg, #ff0055, #ef4444);
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.95);
+  animation: boostFlicker 0.18s infinite alternate;
+}
+
+#turbo-pedal-col span strong {
+  color: #f59e0b;
+}
+
+#turbo-pedal-col.full span strong {
+  color: #ef4444;
+  text-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
+}
+
+@keyframes boostFlicker {
+  0% { opacity: 0.9; }
+  100% { opacity: 1.0; filter: drop-shadow(0 0 6px #ff0055); }
 }
 
 .gauge-wrapper {
