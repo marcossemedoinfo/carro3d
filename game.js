@@ -605,6 +605,8 @@ let reverseLightMat = null;
 const CAMERA_MODE_NAMES = ['PERSEGUIÇÃO', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓRBITA 3D'];
 
 // Dispara o espirro da válvula de alívio do turbo (áudio posicional 3D no motor + vapor sutil sob o capô)
+const _turboBayPos = new THREE.Vector3();
+const _turboPuffVel = new THREE.Vector3();
 function triggerTurboBlowOff() {
   if (!state.turboInstalled) return;
   // A válvula de alívio SÓ espirra se o turbo estiver cheio (pressão acumulada >= 0.65)!
@@ -613,13 +615,13 @@ function triggerTurboBlowOff() {
   carAudio.playTurboBlowOff();
 
   if (smokeSystem && carAudio && carAudio.engineAnchor) {
-    const tempBayPos = new THREE.Vector3();
+    const tempBayPos = _turboBayPos;
     carAudio.engineAnchor.getWorldPosition(tempBayPos);
     tempBayPos.y += 0.14 * CAR_SCALE;
     tempBayPos.z -= 0.16 * CAR_SCALE;
 
     for (let i = 0; i < 4; i++) {
-      const puffVel = new THREE.Vector3(
+      const puffVel = _turboPuffVel.set(
         (Math.random() - 0.5) * 0.55,
         0.35 + Math.random() * 0.40,
         -0.95 - Math.random() * 0.60
@@ -1585,6 +1587,14 @@ function resetCarToSpawn(spawnIndex = state.spawnIdx) {
   state.rpm = state.engineOn ? CORSA_SPECS.IdleRPM : 0;
   state.gear = 1;
   state.currentSteer = 0;
+  // Zera estados residuais (turbo, derrapagem, pedais) para não "herdar" efeitos após reposicionar
+  state.turboBoost = 0;
+  state.skidIntensity = 0;
+  state.throttleInput = 0;
+  state.brakeInput = 0;
+  state.shiftCooldown = 0;
+  state.cuttingRev = false;
+  for (let i = 0; i < 4; i++) state.wheelSkids[i] = 0;
 
   camCurrentPos.set(sp.pos.x, sp.pos.y + 1.4, sp.pos.z + 3.6);
   camCurrentLook.set(sp.pos.x, sp.pos.y + 0.25, sp.pos.z - 1.5);
@@ -1975,9 +1985,10 @@ function updateVehiclePhysicsAndEffects(dt) {
     }
   }
 
-  // Efeito sutil de vibração de torque-steer quando destraciona a frente com turbo cheio
+  // Torque-steer suave quando destraciona a frente com turbo cheio (oscilação contínua, sem tremedeira aleatória)
   if (isFrontWheelSpinningTurbo) {
-    chassisBody.angularVelocity.y += (Math.random() - 0.5) * 0.35 * dt * 60;
+    const tq = Math.sin(performance.now() * 0.006) * 0.9 + Math.sin(performance.now() * 0.0137) * 0.5;
+    chassisBody.angularVelocity.y += tq * 0.25 * dt;
   }
 
   state.skidIntensity = THREE.MathUtils.lerp(state.skidIntensity, maxSkid, Math.min(1, dt * 12));
@@ -2494,6 +2505,26 @@ window.addEventListener('keydown', (e) => {
     } else if (k === 'r') {
       resetCarToSpawn(state.spawnIdx);
     }
+  }
+});
+
+// Evita teclas/pedais "presos" quando a janela perde o foco (Alt+Tab, notificação, troca de aba)
+function releaseAllInputs() {
+  keys.w = keys.s = keys.a = keys.d = keys.space = false;
+  state.touchInput.throttle = 0;
+  state.touchInput.brake = 0;
+  state.touchInput.handbrake = 0;
+  state.touchInput.steer = 0;
+  state.isPointerDown = false;
+  document.querySelectorAll('.pressed').forEach((el) => el.classList.remove('pressed'));
+}
+window.addEventListener('blur', releaseAllInputs);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    releaseAllInputs();
+    if (carAudio.ctx && carAudio.ctx.state === 'running') carAudio.ctx.suspend();
+  } else if (state.started && carAudio.ctx && carAudio.ctx.state === 'suspended') {
+    carAudio.ctx.resume();
   }
 });
 
