@@ -94,6 +94,7 @@ const state = {
   engineOn: false,
   startingEngine: false,
   headlightsOn: false,    // Faróis dianteiros e lanternas traseiras (Tecla L ou botão HUD)
+  turboInstalled: false,  // Kit Turbo com espirro de alívio nas trocas de marcha e torque extra
   transmission: 'MANUAL', // 'MANUAL' ou 'AUTO'
   gear: 1,                // -1 = R, 0 = N, 1..5 = 1ª a 5ª marcha
   shiftCooldown: 0,
@@ -221,13 +222,22 @@ class SpatialCarAudio {
       { key: 'start', url: './Corsa ligando.mp3' },
       { key: 'revCut', url: './Cortar giro.mp3' },
       { key: 'accel', url: './Acelerações.mp3' },
-      { key: 'skid', url: './Carro derrapando.mp3' }
+      { key: 'skid', url: './Carro derrapando.mp3' },
+      { key: 'turbo', url: './turbo.mp3' }
     ];
 
     for (let i = 0; i < files.length; i++) {
       const item = files[i];
-      this.rawBuffers[item.key] = await new Promise((resolve, reject) => {
-        audioLoader.load(item.url, resolve, undefined, reject);
+      this.rawBuffers[item.key] = await new Promise((resolve) => {
+        audioLoader.load(
+          item.url,
+          (buf) => resolve(buf),
+          undefined,
+          (err) => {
+            console.warn(`Erro ao carregar ${item.url}:`, err);
+            resolve(null);
+          }
+        );
       });
       if (onProgress) onProgress((i + 1) / files.length);
     }
@@ -267,6 +277,11 @@ class SpatialCarAudio {
     this.sources.revCutExhaust = this.createPositionalNode(this.exhaustAnchor, 2.2, 90, 180, 340, 0.6);
     this.sources.revCutEngine = this.createPositionalNode(this.engineAnchor, 1.8, 75);
     this.sources.skid = this.createPositionalNode(this.tiresAnchor, 2.2, 90);
+    this.sources.turbo = this.createPositionalNode(this.engineAnchor, 3.2, 95);
+    if (this.rawBuffers.turbo) {
+      this.sources.turbo.setBuffer(this.rawBuffers.turbo);
+      this.sources.turbo.setLoop(false);
+    }
   }
 
   startContinuousLoops() {
@@ -307,6 +322,30 @@ class SpatialCarAudio {
     setTimeout(() => {
       if (onComplete) onComplete();
     }, 1050);
+  }
+
+  playTurboBlowOff() {
+    if (!state.turboInstalled) return;
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+    const turboNode = this.sources.turbo;
+    if (!turboNode || !this.rawBuffers.turbo) return;
+
+    if (!turboNode.buffer) {
+      turboNode.setBuffer(this.rawBuffers.turbo);
+    }
+    if (turboNode.isPlaying) {
+      try {
+        turboNode.stop();
+      } catch (e) {}
+    }
+    turboNode.setLoop(false);
+    turboNode.setVolume(1.0);
+    // Variação leve e realista de pitch dependendo da rotação do motor na troca de marcha
+    const pitch = THREE.MathUtils.clamp(0.94 + (state.rpm / CORSA_SPECS.MaxRPM) * 0.16, 0.90, 1.15);
+    turboNode.setPlaybackRate(pitch);
+    turboNode.play();
   }
 
   shutDownEngine() {
@@ -476,6 +515,34 @@ let brakeLightMat = null;
 let reverseLightMat = null;
 
 const CAMERA_MODE_NAMES = ['PERSEGUIÇÃO', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓRBITA 3D'];
+
+// Dispara o espirro da válvula de alívio do turbo (áudio posicional 3D no motor + vapor sutil sob o capô)
+function triggerTurboBlowOff() {
+  if (!state.turboInstalled) return;
+  carAudio.playTurboBlowOff();
+
+  if (smokeSystem && carAudio && carAudio.engineAnchor) {
+    const tempBayPos = new THREE.Vector3();
+    carAudio.engineAnchor.getWorldPosition(tempBayPos);
+    tempBayPos.y += 0.14 * CAR_SCALE;
+    tempBayPos.z -= 0.16 * CAR_SCALE;
+
+    for (let i = 0; i < 3; i++) {
+      const puffVel = new THREE.Vector3(
+        (Math.random() - 0.5) * 0.45,
+        0.30 + Math.random() * 0.35,
+        -0.85 - Math.random() * 0.5
+      );
+      smokeSystem.spawn(tempBayPos, puffVel, {
+        startScale: 0.12,
+        endScale: 0.65,
+        opacity: 0.42,
+        maxAge: 0.45,
+        colorHex: 0xf8fafc
+      });
+    }
+  }
+}
 
 function splitCorsaModelIntoChassisAndWheels(gltfScene) {
   const chassisGroup = new THREE.Group();
@@ -1619,7 +1686,8 @@ function updateVehiclePhysicsAndEffects(dt) {
       speedLimiterFactor = (maxGearSpeedKmh - state.speedKmh) / 2.5;
     }
 
-    wheelDriveForce = state.throttleInput * baseGearForce * torqueCurve * speedLimiterFactor;
+    const turboBoostFactor = state.turboInstalled ? 1.25 : 1.0;
+    wheelDriveForce = state.throttleInput * baseGearForce * torqueCurve * speedLimiterFactor * turboBoostFactor;
 
     if (state.speedKmh > maxGearSpeedKmh + 1.5) {
       wheelDriveForce = -Math.sign(state.forwardSpeedMs) * 900;
@@ -1986,7 +2054,11 @@ const hudDom = {
   mBtnLights: document.getElementById('mbtn-lights'),
   mTransTxt: document.getElementById('m-trans-txt'),
   mGearCluster: document.getElementById('m-gear-cluster'),
-  mSpawnTxt: document.getElementById('m-spawn-txt')
+  mSpawnTxt: document.getElementById('m-spawn-txt'),
+  turboLabel: document.getElementById('turbo-label'),
+  btnTurbo: document.getElementById('btn-turbo'),
+  mTurboTxt: document.getElementById('m-turbo-txt'),
+  mBtnTurbo: document.getElementById('mbtn-turbo')
 };
 
 function updateHUD() {
@@ -2059,6 +2131,16 @@ function updateHUD() {
   if (hudDom.mSpawnTxt) {
     hudDom.mSpawnTxt.textContent = `AV. ${state.spawnIdx + 1}`;
   }
+
+  // Atualiza botões e indicadores do Turbo
+  if (hudDom.turboLabel && hudDom.btnTurbo) {
+    hudDom.turboLabel.textContent = state.turboInstalled ? 'ON 🐌' : 'OFF';
+    hudDom.btnTurbo.classList.toggle('turbo-on', state.turboInstalled);
+  }
+  if (hudDom.mTurboTxt && hudDom.mBtnTurbo) {
+    hudDom.mTurboTxt.textContent = state.turboInstalled ? 'TURBO: ON' : 'TURBO: OFF';
+    hudDom.mBtnTurbo.classList.toggle('active', state.turboInstalled);
+  }
 }
 
 // ============================================================================
@@ -2069,6 +2151,11 @@ function changeGear(newGear) {
   if (clamped !== state.gear) {
     state.gear = clamped;
     state.shiftCooldown = 0.14;
+
+    // Se o kit turbo estiver instalado e o motor ligado, espirra a válvula de alívio nas trocas de marcha
+    if (state.turboInstalled && state.engineOn) {
+      triggerTurboBlowOff();
+    }
   }
 }
 
@@ -2111,6 +2198,34 @@ function toggleEngineIgnition() {
   }
 }
 
+function setTurboInstalled(enabled) {
+  state.turboInstalled = enabled;
+  const toggleBtn = document.getElementById('turbo-toggle-btn');
+  const badge = document.getElementById('turbo-badge');
+  const hudBtn = document.getElementById('btn-turbo');
+  const hudLabel = document.getElementById('turbo-label');
+  const mBtn = document.getElementById('mbtn-turbo');
+  const mTxt = document.getElementById('m-turbo-txt');
+
+  if (toggleBtn) {
+    toggleBtn.classList.toggle('is-active', enabled);
+  }
+  if (badge) {
+    badge.textContent = enabled ? 'TURBO: INSTALADO 🐌' : 'TURBO: DESATIVADO';
+    badge.classList.toggle('active', enabled);
+  }
+  if (hudLabel) hudLabel.textContent = enabled ? 'ON 🐌' : 'OFF';
+  if (hudBtn) hudBtn.classList.toggle('turbo-on', enabled);
+
+  if (mTxt) mTxt.textContent = enabled ? 'TURBO: ON' : 'TURBO: OFF';
+  if (mBtn) mBtn.classList.toggle('active', enabled);
+
+  // Espirro de alívio instantâneo caso já esteja jogando com o motor ligado
+  if (enabled && state.started && state.engineOn) {
+    triggerTurboBlowOff();
+  }
+}
+
 function cycleCameraMode() {
   state.cameraMode = (state.cameraMode + 1) % 4;
   state.orbitYaw = state.cameraMode === 3 ? Math.PI * 0.35 : 0;
@@ -2139,6 +2254,8 @@ window.addEventListener('keydown', (e) => {
       changeGear(state.gear - 1);
     } else if (k === 'm') {
       toggleTransmissionMode();
+    } else if (k === 't') {
+      setTurboInstalled(!state.turboInstalled);
     } else if (k === 'l') {
       toggleHeadlights();
     } else if (k === 'i') {
@@ -2446,6 +2563,23 @@ function setupMobileControls() {
   }
 }
 
+function setupTurboControls() {
+  document.getElementById('turbo-toggle-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setTurboInstalled(!state.turboInstalled);
+  });
+
+  document.getElementById('btn-turbo')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setTurboInstalled(!state.turboInstalled);
+  });
+
+  document.getElementById('mbtn-turbo')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setTurboInstalled(!state.turboInstalled);
+  });
+}
+
 startBtn.addEventListener('click', () => {
   if (!state.loaded || state.started) return;
   state.started = true;
@@ -2455,6 +2589,7 @@ startBtn.addEventListener('click', () => {
   document.getElementById('minimap-container')?.classList.remove('hud-hidden');
 
   setMobileMode(state.mobileMode);
+  setTurboInstalled(state.turboInstalled);
 
   carAudio.startContinuousLoops();
   toggleEngineIgnition();
@@ -2507,4 +2642,5 @@ function animate(now) {
 
 initSimulation();
 setupMobileControls();
+setupTurboControls();
 requestAnimationFrame(animate);

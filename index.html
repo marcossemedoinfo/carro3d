@@ -40,8 +40,9 @@
         <div class="ctrl-item"><kbd>ESPAÇO</kbd> Freio de Mão</div>
         <div class="ctrl-item"><kbd>+</kbd> <kbd>-</kbd> Passar Marchas</div>
         <div class="ctrl-item"><kbd>M</kbd> Câmbio Auto / Manual</div>
-        <div class="ctrl-item"><kbd>L</kbd> Ligar / Desligar Faróis</div>
-        <div class="ctrl-item"><kbd>I</kbd> Ligar / Desligar Motor</div>
+        <div class="ctrl-item"><kbd>T</kbd> Instalar Turbo</div>
+        <div class="ctrl-item"><kbd>L</kbd> Faróis</div>
+        <div class="ctrl-item"><kbd>I</kbd> Motor</div>
         <div class="ctrl-item"><kbd>C</kbd> Câmera / <kbd>R</kbd> Reset</div>
       </div>
 
@@ -55,6 +56,18 @@
           </div>
         </div>
         <span id="mobile-badge" class="toggle-badge">TOQUE: DESATIVADO</span>
+      </button>
+
+      <!-- Botão para instalar Kit Turbo com espirro nas trocas de marcha -->
+      <button id="turbo-toggle-btn" class="turbo-toggle-btn" type="button">
+        <div class="toggle-left">
+          <span class="btn-icon">🐌</span>
+          <div class="toggle-text">
+            <span class="toggle-title">Quer instalar turbo no Corsa?</span>
+            <span class="toggle-desc">Espirro da válvula de alívio nas trocas de marcha e +25% de torque</span>
+          </div>
+        </div>
+        <span id="turbo-badge" class="toggle-badge">TURBO: DESATIVADO</span>
       </button>
 
       <button id="start-btn" disabled>
@@ -103,6 +116,9 @@
       </button>
       <button id="btn-ignition" class="hud-btn engine-on" title="Atalho: Tecla I">
         MOTOR: <strong id="engine-label">LIGADO</strong>
+      </button>
+      <button id="btn-turbo" class="hud-btn" title="Instalar / Remover Kit Turbo (Atalho: Tecla T)">
+        TURBO: <strong id="turbo-label">OFF</strong>
       </button>
       <button id="btn-camera" class="hud-btn" title="Atalho: Tecla C">
         CÂMERA: <strong id="cam-label">PERSEGUIÇÃO</strong>
@@ -169,7 +185,7 @@
   <!-- Bottom Left Controls Reminder -->
   <div id="controls-helper" class="hud-hidden">
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis</div>
-    <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>I</kbd> Ignição</div>
+    <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>T</kbd> Turbo &bull; <kbd>I</kbd> Ignição</div>
     <div><kbd>C</kbd> Câmera (Perseguição / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
   </div>
 
@@ -180,6 +196,10 @@
       <button id="mbtn-ignition" class="m-action-btn active" type="button" title="Ligar / Desligar Motor">
         <span class="m-icon">⚡</span>
         <span id="m-ignition-txt" class="m-txt">MOTOR: ON</span>
+      </button>
+      <button id="mbtn-turbo" class="m-action-btn" type="button" title="Instalar / Remover Turbo">
+        <span class="m-icon">🐌</span>
+        <span id="m-turbo-txt" class="m-txt">TURBO: OFF</span>
       </button>
       <button id="mbtn-lights" class="m-action-btn" type="button" title="Ligar / Desligar Faróis">
         <span class="m-icon">💡</span>
