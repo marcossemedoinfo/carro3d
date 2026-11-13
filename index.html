@@ -2,8 +2,8 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Opel Corsa B 1998 — Simulador 3D Realista</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Opel Corsa B 1998 — San Francisco 3D</title>
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
     {
@@ -16,251 +16,350 @@
   </script>
 </head>
 <body>
-  <!-- Viewport Canvas Container -->
   <div id="canvas-container"></div>
 
-  <!-- Loading & Engine Start Overlay -->
+  <!-- Menu Principal / Pausa / Opções -->
   <div id="loading-overlay">
-    <div class="loader-card">
-      <div class="badge-sim">SIMULAÇÃO FÍSICA &bull; TRAÇÃO DIANTEIRA (FWD)</div>
-      <h1>OPEL CORSA B <span class="accent">1998</span></h1>
-      <p class="subtitle">Física Real de Suspensão MacPherson, Pneus Pacejka, Áudio Espacial 3D e Emissão de Partículas</p>
+    <div class="game-menu-shell">
+      <div class="menu-brand-header">
+        <div class="badge-sim">SAN FRANCISCO • FÍSICA VEICULAR FWD 3D</div>
+        <h1>OPEL CORSA B <span class="accent">'98</span></h1>
+        <p class="subtitle">Simulação Urbana 3D em San Francisco &bull; Câmbio, Turbo &amp; Clima Dinâmico</p>
+      </div>
 
+      <!-- Barra de Progresso de Carregamento -->
       <div id="progress-section">
         <div class="progress-bar-track">
           <div id="progress-bar-fill"></div>
         </div>
-        <div id="loading-status">0%</div>
+        <div class="progress-label">Carregando San Francisco &amp; Opel Corsa B: <span id="loading-status">0%</span></div>
       </div>
 
-      <div class="controls-grid">
-        <div class="ctrl-item"><kbd>W</kbd> Acelerar</div>
-        <div class="ctrl-item"><kbd>S</kbd> Frear / Ré</div>
-        <div class="ctrl-item"><kbd>A</kbd> <kbd>D</kbd> Direção</div>
-        <div class="ctrl-item"><kbd>ESPAÇO</kbd> Freio de Mão</div>
-        <div class="ctrl-item"><kbd>+</kbd> <kbd>-</kbd> Passar Marchas</div>
-        <div class="ctrl-item"><kbd>M</kbd> Câmbio Auto / Manual</div>
-        <div class="ctrl-item"><kbd>T</kbd> Instalar Turbo</div>
-        <div class="ctrl-item"><kbd>H</kbd> Clima Dia/Noite</div>
-        <div class="ctrl-item"><kbd>G</kbd> Gráficos</div>
-        <div class="ctrl-item"><kbd>L</kbd> Faróis</div>
-        <div class="ctrl-item"><kbd>I</kbd> Motor</div>
-        <div class="ctrl-item"><kbd>C</kbd> Câmera / <kbd>R</kbd> Reset</div>
+      <!-- VIEW 1: MENU PRINCIPAL -->
+      <div id="menu-home" class="menu-view active">
+        <div class="menu-selection-summary">
+          <div class="sel-pill">🗺️ Mapa: <strong id="summary-map-name">San Francisco</strong></div>
+          <div class="sel-pill">🚗 Carro: <strong id="summary-car-name">Opel Corsa B '98</strong></div>
+          <div class="sel-pill">🖼️ Gráficos: <strong id="summary-gfx-name">HIGH</strong></div>
+        </div>
+
+        <div class="main-menu-buttons">
+          <button id="start-btn" class="menu-btn primary-cta" disabled type="button">
+            <span>▶ INICIAR JOGO</span>
+          </button>
+
+          <div class="menu-secondary-grid">
+            <button id="btn-open-options" class="menu-btn" type="button">
+              <span>⚙️ OPÇÕES</span>
+              <small>Áudio, Gráficos &amp; Teclas</small>
+            </button>
+            <button id="btn-open-maps" class="menu-btn" type="button">
+              <span>🗺️ SELETOR DE MAPA</span>
+              <small>San Francisco</small>
+            </button>
+            <button id="btn-open-cars" class="menu-btn" type="button">
+              <span>🚗 SELETOR DE CARROS</span>
+              <small>Opel Corsa B '98</small>
+            </button>
+            <button id="btn-pause-reset" class="menu-btn hud-hidden" type="button">
+              <span>🔄 REPOSICIONAR CARRO</span>
+              <small>Voltar ao ponto de partida</small>
+            </button>
+          </div>
+        </div>
+
+        <div class="menu-quick-bar">
+          <button id="menu-tod-btn" class="quick-chip" type="button">☀️ Clima: <span id="menu-tod-label">Dia</span></button>
+          <button id="turbo-toggle-btn" class="quick-chip" type="button">
+            <span id="turbo-badge">TURBO: DESATIVADO</span>
+          </button>
+          <button id="mobile-toggle-btn" class="quick-chip" type="button">
+            <span id="mobile-badge">📱 TOQUE: DESATIVADO</span>
+          </button>
+        </div>
       </div>
 
-      <!-- Botão para abrir configurações gráficas antes de iniciar -->
-      <button id="start-graphics-btn" class="mobile-toggle-btn" type="button">
-        <div class="toggle-left">
-          <span class="btn-icon">⚙️</span>
-          <div class="toggle-text">
-            <span class="toggle-title">Qualidade Gráfica</span>
-            <span class="toggle-desc">Ajuste sombras, reflexos e resolução (Low, Medium, High, Ultra)</span>
+      <!-- VIEW 2: OPÇÕES (ÁUDIO / GRÁFICOS / ATRIBUIR TECLAS) -->
+      <div id="panel-options" class="menu-view">
+        <div class="subpanel-topbar">
+          <h2>⚙️ OPÇÕES DO JOGO</h2>
+          <button class="back-menu-btn" data-back="menu-home" type="button">← VOLTAR</button>
+        </div>
+
+        <div class="options-tabs" role="tablist">
+          <button class="opt-tab-btn active" data-tab="tab-audio" type="button">🔊 Áudio</button>
+          <button class="opt-tab-btn" data-tab="tab-graphics" type="button">✨ Gráficos</button>
+          <button class="opt-tab-btn" data-tab="tab-keybinds" type="button">⌨️ Atribuir Teclas</button>
+        </div>
+
+        <!-- TAB ÁUDIO -->
+        <div id="tab-audio" class="opt-tab-content active">
+          <div class="slider-group">
+            <div class="slider-row">
+              <label for="vol-master">Volume Geral</label>
+              <span id="vol-master-val" class="slider-val">85%</span>
+            </div>
+            <input id="vol-master" class="menu-slider" type="range" min="0" max="100" value="85" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-row">
+              <label for="vol-engine">Motor &amp; Escapamento</label>
+              <span id="vol-engine-val" class="slider-val">100%</span>
+            </div>
+            <input id="vol-engine" class="menu-slider" type="range" min="0" max="100" value="100" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-row">
+              <label for="vol-turbo">Turbo &amp; Válvula de Alívio</label>
+              <span id="vol-turbo-val" class="slider-val">90%</span>
+            </div>
+            <input id="vol-turbo" class="menu-slider" type="range" min="0" max="100" value="90" />
+          </div>
+
+          <div class="slider-group">
+            <div class="slider-row">
+              <label for="vol-tires">Pneus &amp; Derrapagem</label>
+              <span id="vol-tires-val" class="slider-val">95%</span>
+            </div>
+            <input id="vol-tires" class="menu-slider" type="range" min="0" max="100" value="95" />
+          </div>
+
+          <div class="tab-actions-row">
+            <button id="btn-reset-audio" class="secondary-action-btn" type="button">Restaurar Padrões</button>
           </div>
         </div>
-        <span id="start-graphics-badge" class="toggle-badge">ALTO</span>
-      </button>
 
-      <!-- Botão para ativar modo celular com joystick e pedais na tela -->
-      <button id="mobile-toggle-btn" class="mobile-toggle-btn" type="button">
-        <div class="toggle-left">
-          <span class="btn-icon">📱</span>
-          <div class="toggle-text">
-            <span class="toggle-title">Jogando pelo celular?</span>
-            <span class="toggle-desc">Clique aqui para adicionar o joystick e os botões</span>
+        <!-- TAB GRÁFICOS -->
+        <div id="tab-graphics" class="opt-tab-content">
+          <div class="graphics-presets-grid">
+            <button class="gfx-preset-card" data-quality="low" type="button">
+              <div class="gfx-title">LOW <span class="gfx-tag">BAIXO</span></div>
+              <div class="gfx-desc">Máximo FPS para PCs simples e celulares.</div>
+              <ul class="gfx-specs">
+                <li>Resolução: 75%</li>
+                <li>Sombras: Desligadas</li>
+                <li>Reflexos: Desligados</li>
+              </ul>
+            </button>
+
+            <button class="gfx-preset-card" data-quality="medium" type="button">
+              <div class="gfx-title">MEDIUM <span class="gfx-tag">MÉDIO</span></div>
+              <div class="gfx-desc">Visual bonito e fluido constante a 60 FPS.</div>
+              <ul class="gfx-specs">
+                <li>Resolução: 100%</li>
+                <li>Sombras: 1024px</li>
+                <li>Reflexos: Céu</li>
+              </ul>
+            </button>
+
+            <button class="gfx-preset-card active" data-quality="high" type="button">
+              <div class="gfx-title">HIGH <span class="gfx-tag">ALTO</span></div>
+              <div class="gfx-desc">Verniz automotivo (Clearcoat) + sombras suaves.</div>
+              <ul class="gfx-specs">
+                <li>Resolução: até 150%</li>
+                <li>Sombras: 2048px</li>
+                <li>Reflexos: 360°</li>
+              </ul>
+            </button>
+
+            <button class="gfx-preset-card" data-quality="ultra" type="button">
+              <div class="gfx-title">ULTRA <span class="gfx-tag">MÁXIMO</span></div>
+              <div class="gfx-desc">Reflexos 3D da cidade em tempo real na lataria.</div>
+              <ul class="gfx-specs">
+                <li>Resolução: até 200%</li>
+                <li>Sombras: 4096px</li>
+                <li>Reflexos: Cidade 3D</li>
+              </ul>
+            </button>
           </div>
         </div>
-        <span id="mobile-badge" class="toggle-badge">TOQUE: DESATIVADO</span>
-      </button>
 
-      <!-- Botão para instalar Kit Turbo com espirro nas trocas de marcha -->
-      <button id="turbo-toggle-btn" class="turbo-toggle-btn" type="button">
-        <div class="toggle-left">
-          <span class="btn-icon">🐌</span>
-          <div class="toggle-text">
-            <span class="toggle-title">Quer instalar turbo no Corsa?</span>
-            <span class="toggle-desc">Espirro da válvula de alívio nas trocas de marcha e +25% de torque</span>
+        <!-- TAB ATRIBUIR TECLAS -->
+        <div id="tab-keybinds" class="opt-tab-content">
+          <div class="keybinds-quick-controls">
+            <button id="menu-trans-btn" class="quick-chip" type="button">⚙️ Câmbio: <span id="menu-trans-label">MANUAL</span></button>
+            <button id="menu-lights-btn" class="quick-chip" type="button">💡 Faróis: <span id="menu-lights-label">OFF</span></button>
+            <button id="menu-camera-btn" class="quick-chip" type="button">🎥 Câmera: <span id="menu-camera-label">PERSEGUIÇÃO</span></button>
+          </div>
+          <div id="keybinds-list" class="keybinds-list"></div>
+          <div class="tab-actions-row">
+            <span class="graphics-hint">Clique em uma tecla para alterar &bull; <kbd>ESC</kbd> cancela</span>
+            <button id="btn-reset-keys" class="secondary-action-btn" type="button">Restaurar Teclas</button>
           </div>
         </div>
-        <span id="turbo-badge" class="toggle-badge">TURBO: DESATIVADO</span>
-      </button>
+      </div>
 
-      <button id="start-btn" disabled>
-        <span class="key-icon">&#9889;</span> DAR PARTIDA NO CORSA
-      </button>
+      <!-- VIEW 3: SELETOR DE MAPA -->
+      <div id="panel-maps" class="menu-view">
+        <div class="subpanel-topbar">
+          <h2>🗺️ SELETOR DE MAPA</h2>
+          <button class="back-menu-btn" data-back="menu-home" type="button">← VOLTAR</button>
+        </div>
+
+        <div class="selector-grid">
+          <button class="selector-card active" data-map="san_francisco" type="button">
+            <div class="sel-card-header">
+              <span class="sel-badge">ATIVO</span>
+              <h3>San Francisco, CA</h3>
+            </div>
+            <p>Avenidas inclinadas, Golden Gate Bridge, orla portuária e túneis urbanos em escala métrica 1:1.</p>
+            <div class="sel-specs">
+              <span>🌉 Ponte Golden Gate</span>
+              <span>⛰️ Ladeiras Reais</span>
+              <span>🛣️ Colisão Sólida 3D</span>
+            </div>
+          </button>
+
+          <div class="selector-card locked" aria-disabled="true">
+            <div class="sel-card-header">
+              <span class="sel-badge soon">EM BREVE</span>
+              <h3>Novos Mapas</h3>
+            </div>
+            <p>Mais circuitos e cidades serão adicionados em futuras atualizações.</p>
+          </div>
+        </div>
+
+        <div class="spawn-selector-box">
+          <div class="spawn-selector-title">📍 Ponto de Partida em San Francisco:</div>
+          <div class="spawn-chips-row">
+            <button class="spawn-chip active" data-spawn="0" type="button">1. Ponte Golden Gate</button>
+            <button class="spawn-chip" data-spawn="1" type="button">2. Avenida Central</button>
+            <button class="spawn-chip" data-spawn="2" type="button">3. Porto Sul</button>
+            <button class="spawn-chip" data-spawn="3" type="button">4. Zona dos Túneis</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW 4: SELETOR DE CARROS -->
+      <div id="panel-cars" class="menu-view">
+        <div class="subpanel-topbar">
+          <h2>🚗 SELETOR DE CARROS</h2>
+          <button class="back-menu-btn" data-back="menu-home" type="button">← VOLTAR</button>
+        </div>
+
+        <div class="selector-grid">
+          <button class="selector-card active" data-car="corsa_b_1998" type="button">
+            <div class="sel-card-header">
+              <span class="sel-badge">GARAGEM</span>
+              <h3>Opel Corsa B 1998</h3>
+            </div>
+            <p>Hatchback clássico 1.6 MPFI com tração dianteira (FWD), câmbio 5 marchas e suspensão independente.</p>
+            <div class="sel-specs">
+              <span>⚡ Tração FWD</span>
+              <span>🏎️ 180 KM/H</span>
+              <span>🐌 Kit Turbo 1.5 BAR</span>
+            </div>
+          </button>
+
+          <div class="selector-card locked" aria-disabled="true">
+            <div class="sel-card-header">
+              <span class="sel-badge soon">EM BREVE</span>
+              <h3>Novos Carros</h3>
+            </div>
+            <p>Novos veículos esportivos e clássicos nacionais entrarão na garagem.</p>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- Top Telemetry & Controls HUD -->
-  <div id="top-hud" class="hud-hidden">
-    <div class="hud-panel telemetry-panel">
-      <div class="panel-title">TELEMETRIA FWD &amp; SUSPENSÃO</div>
-      <div class="susp-grid">
-        <div class="wheel-stat">
-          <span class="w-label">DE (Tração)</span>
-          <div class="bar-mini"><div id="susp-fl" class="bar-fill"></div></div>
-          <span id="slip-fl" class="slip-dot"></span>
-        </div>
-        <div class="wheel-stat">
-          <span class="w-label">DD (Tração)</span>
-          <div class="bar-mini"><div id="susp-fr" class="bar-fill"></div></div>
-          <span id="slip-fr" class="slip-dot"></span>
-        </div>
-        <div class="wheel-stat">
-          <span class="w-label">TE</span>
-          <div class="bar-mini"><div id="susp-rl" class="bar-fill"></div></div>
-          <span id="slip-rl" class="slip-dot"></span>
-        </div>
-        <div class="wheel-stat">
-          <span class="w-label">TD</span>
-          <div class="bar-mini"><div id="susp-rr" class="bar-fill"></div></div>
-          <span id="slip-rr" class="slip-dot"></span>
-        </div>
-      </div>
-      <div class="audio-3d-indicator">
-        <span class="pulse-dot"></span> Áudio 3D HRTF: Motor (Dianteira) &bull; Escapamento (Traseira)
-      </div>
-    </div>
-
-    <div class="hud-panel actions-panel">
-      <button id="btn-transmission" class="hud-btn active-mode" title="Atalho: Tecla M">
-        CÂMBIO: <strong id="trans-label">MANUAL</strong>
-      </button>
-      <button id="btn-tod" class="hud-btn tod-day" title="Alternar Horário / Clima (Atalho: Tecla H)">
-        CLIMA: <strong id="tod-label">☀️ DIA</strong>
-      </button>
-      <button id="btn-graphics" class="hud-btn" title="Configurações Gráficas (Atalho: Tecla G)">
-        ⚙️ GRÁFICOS: <strong id="graphics-label">ALTO</strong>
-      </button>
-      <button id="btn-lights" class="hud-btn engine-off" title="Atalho: Tecla L">
-        FARÓIS: <strong id="lights-label">OFF</strong>
-      </button>
-      <button id="btn-ignition" class="hud-btn engine-on" title="Atalho: Tecla I">
-        MOTOR: <strong id="engine-label">LIGADO</strong>
-      </button>
-      <button id="btn-turbo" class="hud-btn" title="Instalar / Remover Kit Turbo (Atalho: Tecla T)">
-        TURBO: <strong id="turbo-label">OFF</strong>
-      </button>
-      <button id="btn-camera" class="hud-btn" title="Atalho: Tecla C">
-        CÂMERA: <strong id="cam-label">PERSEGUIÇÃO</strong>
-      </button>
-      <button id="btn-spawn" class="hud-btn" title="Alternar Avenida">
-        PISTA: <strong id="spawn-label">AVENIDA 1</strong>
-      </button>
-      <button id="btn-reset" class="hud-btn" title="Atalho: Tecla R">
-        REPOSICIONAR <kbd>R</kbd>
-      </button>
-      <button id="btn-toggle-touch" class="hud-btn" title="Alternar Joystick e Controles na Tela">
-        📱 TOUCH: <strong id="touch-hud-label">OFF</strong>
-      </button>
-    </div>
-  </div>
-
-  <!-- Notification Banner for Cut-Off / Drift / Engine -->
-  <div id="status-banner" class="hud-hidden"></div>
-
-  <!-- Minimapa Quadrado com Pontas Arredondadas (Canto Esquerdo) -->
-  <div id="minimap-container" class="hud-hidden" title="Minimapa da Cidade">
-    <canvas id="minimap-canvas" width="300" height="300"></canvas>
-    <div class="minimap-badge">
-      <span class="minimap-dot"></span>
-      <span id="minimap-title">GPS &bull; MAPA</span>
-    </div>
-    <div class="minimap-compass" id="minimap-compass" title="Bússola (Clique para fixar o Norte)">
-      <span class="compass-n">N</span>
-    </div>
-    <div class="minimap-scale" id="minimap-scale">100m</div>
-  </div>
-
-  <!-- Bottom Right Instrument Cluster (Tachometer, Gear, Speedometer, Pedals) -->
+  <!-- HUD Limpo Durante o Jogo -->
   <div id="dashboard-hud" class="hud-hidden">
-    <div class="pedals-cluster">
-      <div class="pedal-col">
-        <div class="pedal-track"><div id="bar-throttle" class="pedal-fill throttle"></div></div>
-        <span>ACEL <kbd>W</kbd></span>
-      </div>
-      <div class="pedal-col">
-        <div class="pedal-track"><div id="bar-brake" class="pedal-fill brake"></div></div>
-        <span>FREIO <kbd>S</kbd></span>
-      </div>
-      <div class="pedal-col">
-        <div class="pedal-track"><div id="bar-handbrake" class="pedal-fill handbrake"></div></div>
-        <span>MÃO <kbd>ESP</kbd></span>
-      </div>
-      <div id="turbo-pedal-col" class="pedal-col hud-hidden">
-        <div class="pedal-track"><div id="bar-turbo" class="pedal-fill turbo"></div></div>
-        <span>BOOST <strong id="turbo-bar-val">0.0b</strong></span>
-      </div>
-    </div>
-
-    <div class="gauge-wrapper">
-      <canvas id="tachometer-canvas" width="240" height="240"></canvas>
-      <div class="gauge-center-info">
-        <div id="gear-display" class="gear-box">N</div>
-        <div class="speed-readout">
-          <span id="speed-value">0</span>
-          <small>km/h</small>
-        </div>
-        <div id="rpm-readout">0 RPM</div>
-      </div>
-      <div id="redline-lamp" class="shift-light">CORTE DE GIRO</div>
-    </div>
-  </div>
-
-  <!-- Bottom Left Controls Reminder -->
-  <div id="controls-helper" class="hud-hidden">
-    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Dirigir &bull; <kbd>ESPAÇO</kbd> Freio de Mão &bull; <kbd>L</kbd> Faróis &bull; <kbd>H</kbd> Clima &bull; <kbd>G</kbd> Gráficos</div>
-    <div><kbd>+</kbd> / <kbd>-</kbd> Trocar Marcha &bull; <kbd>M</kbd> Auto/Manual &bull; <kbd>T</kbd> Turbo &bull; <kbd>I</kbd> Ignição</div>
-    <div><kbd>C</kbd> Câmera (Perseguição / Capô / Escape / Livre) &bull; Arraste o Mouse para girar a câmera e sentir o Som 3D</div>
-  </div>
-
-  <!-- Controles de Toque para Celular (Joystick Analógico + Pedais + Ações Rápidas) -->
-  <div id="mobile-controls" class="hud-hidden">
-    <!-- Barra Superior de Ações Rápidas Mobile -->
-    <div class="mobile-top-bar">
-      <button id="mbtn-ignition" class="m-action-btn active" type="button" title="Ligar / Desligar Motor">
-        <span class="m-icon">⚡</span>
-        <span id="m-ignition-txt" class="m-txt">MOTOR: ON</span>
+    <!-- Barra Minimalista Superior Direita: Dia/Noite, Turbo, Opções -->
+    <div id="top-hud">
+      <button id="btn-tod" class="hud-btn tod-day" type="button" title="Alternar Dia / Pôr do Sol / Noite (H)">
+        <span class="label">CLIMA</span>
+        <span id="tod-label" class="value">☀️ DIA</span>
       </button>
-      <button id="mbtn-turbo" class="m-action-btn" type="button" title="Instalar / Remover Turbo">
+
+      <button id="btn-turbo" class="hud-btn" type="button" title="Ativar / Desativar Turbo (T)">
+        <span class="label">TURBO</span>
+        <span id="turbo-label" class="value">OFF</span>
+      </button>
+
+      <button id="btn-options-hud" class="hud-btn options-btn" type="button" title="Abrir Opções / Pausa (ESC)">
+        <span class="label">MENU</span>
+        <span class="value">⚙️ OPÇÕES</span>
+      </button>
+    </div>
+
+    <!-- Banner Flutuante de Eventos (Corte de Giro / Freio de Mão / Destracionamento Turbo) -->
+    <div id="status-banner" class="hud-hidden">CORTE DE GIRO ATIVO</div>
+
+    <!-- Cluster Limpo Inferior Direito: Velocímetro + RPM + Marcha + Pressão do Turbo -->
+    <div id="instruments-cluster">
+      <div class="clean-gauge-shell">
+        <div class="tachometer-wrapper">
+          <canvas id="tachometer-canvas" width="210" height="210"></canvas>
+          <div class="tacho-center-info">
+            <div class="speed-stack">
+              <span id="speed-value">0</span>
+              <span class="speed-unit">KM/H</span>
+            </div>
+            <div class="gear-rpm-row">
+              <span id="gear-display">1</span>
+              <span id="redline-lamp" title="Corte de Giro"></span>
+            </div>
+            <div id="rpm-readout">0 RPM</div>
+          </div>
+        </div>
+
+        <!-- Barra Vertical Compacta de Boost do Turbo -->
+        <div id="turbo-pedal-col" class="turbo-meter-box hud-hidden">
+          <span class="turbo-tag">BOOST</span>
+          <div class="pedal-track turbo-track"><div id="bar-turbo" class="pedal-fill turbo-fill"></div></div>
+          <span id="turbo-bar-val" class="turbo-bar-num">0.0b</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Minimapa GPS (Superior Esquerdo) -->
+  <div id="minimap-container" class="hud-hidden" title="Clique para alternar Rotação / Norte Fixo">
+    <canvas id="minimap-canvas" width="180" height="180"></canvas>
+    <div class="minimap-header">
+      <span id="minimap-title">GPS • SAN FRANCISCO</span>
+      <span id="minimap-compass">N</span>
+    </div>
+    <div id="minimap-scale">90m</div>
+  </div>
+
+  <!-- Controles de Toque para Celular -->
+  <div id="mobile-controls" class="hud-hidden">
+    <div class="mobile-top-bar">
+      <button id="mbtn-turbo" class="m-action-btn" type="button" title="Ativar / Desativar Turbo">
         <span class="m-icon">🐌</span>
         <span id="m-turbo-txt" class="m-txt">TURBO: OFF</span>
       </button>
-      <button id="mbtn-tod" class="m-action-btn" type="button" title="Alternar Dia / Tarde / Noite">
+      <button id="mbtn-tod" class="m-action-btn" type="button" title="Alternar Dia / Noite">
         <span class="m-icon">☀️</span>
         <span id="m-tod-txt" class="m-txt">DIA</span>
       </button>
-      <button id="mbtn-graphics" class="m-action-btn" type="button" title="Configurações Gráficas">
-        <span class="m-icon">🖼️</span>
-        <span id="m-graphics-txt" class="m-txt">ALTO</span>
-      </button>
-      <button id="mbtn-lights" class="m-action-btn" type="button" title="Ligar / Desligar Faróis">
+      <button id="mbtn-lights" class="m-action-btn" type="button" title="Faróis">
         <span class="m-icon">💡</span>
-        <span id="m-lights-txt" class="m-txt">FARÓIS: OFF</span>
+        <span id="m-lights-txt" class="m-txt">FARÓIS</span>
       </button>
-      <button id="mbtn-transmission" class="m-action-btn" type="button" title="Câmbio Auto / Manual">
+      <button id="mbtn-transmission" class="m-action-btn" type="button" title="Câmbio">
         <span class="m-icon">⚙️</span>
-        <span id="m-trans-txt" class="m-txt">AUTO</span>
+        <span id="m-trans-txt" class="m-txt">MANUAL</span>
       </button>
-      <div id="m-gear-cluster" class="m-gear-cluster" style="display: none;">
-        <button id="mbtn-gear-down" class="m-action-btn m-gear-btn" type="button" title="Reduzir Marcha">-</button>
-        <button id="mbtn-gear-up" class="m-action-btn m-gear-btn" type="button" title="Aumentar Marcha">+</button>
+      <div id="m-gear-cluster" class="m-gear-cluster">
+        <button id="mbtn-gear-down" class="m-action-btn m-gear-btn" type="button">-</button>
+        <button id="mbtn-gear-up" class="m-action-btn m-gear-btn" type="button">+</button>
       </div>
-      <button id="mbtn-spawn" class="m-action-btn" type="button" title="Alternar Avenida">
-        <span class="m-icon">🛣️</span>
-        <span id="m-spawn-txt" class="m-txt">AV. 1</span>
-      </button>
-      <button id="mbtn-camera" class="m-action-btn m-icon-only" type="button" title="Mudar Câmera">
+      <button id="mbtn-camera" class="m-action-btn m-icon-only" type="button" title="Câmera">
         <span class="m-icon">🎥</span>
       </button>
-      <button id="mbtn-reset" class="m-action-btn m-icon-only" type="button" title="Reposicionar Carro">
+      <button id="mbtn-reset" class="m-action-btn m-icon-only" type="button" title="Reposicionar">
         <span class="m-icon">🔄</span>
       </button>
-      <button id="mbtn-switch-pc" class="m-action-btn m-icon-only" type="button" title="Alternar para Modo PC (sem controles na tela)">
-        <span class="m-icon">💻</span>
+      <button id="mbtn-options" class="m-action-btn m-icon-only" type="button" title="Opções">
+        <span class="m-icon">⚙️</span>
       </button>
     </div>
 
-    <!-- Joystick Analógico Virtual para o Volante (Lado Esquerdo) -->
     <div id="virtual-joystick-zone">
       <div id="joystick-base">
         <div class="joystick-arrows">
@@ -272,19 +371,18 @@
           <div class="stick-knob"></div>
         </div>
       </div>
-      <div class="joystick-label">VOLANTE ANALÓGICO</div>
+      <div class="joystick-label">VOLANTE</div>
     </div>
 
-    <!-- Cluster de Pedais & Drift (Lado Direito) -->
     <div class="mobile-pedals-cluster">
       <button id="mbtn-handbrake" class="m-pedal-btn m-handbrake-btn" type="button">
         <span class="pedal-icon">💨</span>
-        <span class="pedal-label">DRIFT / MÃO</span>
+        <span class="pedal-label">MÃO</span>
       </button>
       <div class="pedals-row">
         <button id="mbtn-brake" class="m-pedal-btn m-brake-btn" type="button">
           <span class="pedal-icon">🛑</span>
-          <span class="pedal-label">FREIO / RÉ</span>
+          <span class="pedal-label">FREIO</span>
         </button>
         <button id="mbtn-throttle" class="m-pedal-btn m-throttle-btn" type="button">
           <span class="pedal-icon">⚡</span>
@@ -294,67 +392,6 @@
     </div>
   </div>
 
-  <!-- Modal de Configurações Gráficas (Low / Medium / High / Ultra) -->
-  <div id="graphics-modal" class="modal-backdrop hud-hidden" role="dialog" aria-label="Configurações Gráficas">
-    <div class="graphics-card">
-      <div class="graphics-header">
-        <div>
-          <div class="badge-sim">DESEMPENHO &amp; QUALIDADE VISUAL</div>
-          <h2>⚙️ CONFIGURAÇÕES GRÁFICAS</h2>
-        </div>
-        <button id="close-graphics-btn" class="close-modal-btn" type="button" title="Fechar (ESC / G)">&times;</button>
-      </div>
-
-      <div class="graphics-presets-grid">
-        <button class="gfx-preset-card" data-quality="low" type="button">
-          <div class="gfx-title">LOW <span class="gfx-tag">BAIXO</span></div>
-          <div class="gfx-desc">Máximo FPS para PCs simples e celulares. Sem sombras dinâmicas e sem reflexos.</div>
-          <ul class="gfx-specs">
-            <li>Resolução: 75%</li>
-            <li>Sombras: Apenas contato</li>
-            <li>Reflexos: Desligados</li>
-          </ul>
-        </button>
-
-        <button class="gfx-preset-card" data-quality="medium" type="button">
-          <div class="gfx-title">MEDIUM <span class="gfx-tag">MÉDIO</span></div>
-          <div class="gfx-desc">Equilíbrio entre visual bonito e fluidez constante a 60 FPS.</div>
-          <ul class="gfx-specs">
-            <li>Resolução: 100%</li>
-            <li>Sombras: 1024px</li>
-            <li>Reflexos: Céu e Nuvens</li>
-          </ul>
-        </button>
-
-        <button class="gfx-preset-card active" data-quality="high" type="button">
-          <div class="gfx-title">HIGH <span class="gfx-tag">ALTO</span></div>
-          <div class="gfx-desc">Pintura automotiva com verniz (Clearcoat), reflexos nítidos e sombras suaves.</div>
-          <ul class="gfx-specs">
-            <li>Resolução: até 150%</li>
-            <li>Sombras: 2048px Suaves</li>
-            <li>Reflexos: Clearcoat + Horizonte 360°</li>
-          </ul>
-        </button>
-
-        <button class="gfx-preset-card" data-quality="ultra" type="button">
-          <div class="gfx-title">ULTRA <span class="gfx-tag">MÁXIMO</span></div>
-          <div class="gfx-desc">Fidelidade máxima com reflexos dinâmicos 3D da cidade em tempo real na lataria.</div>
-          <ul class="gfx-specs">
-            <li>Resolução: até 200% (Nativa)</li>
-            <li>Sombras: 4096px Ultra</li>
-            <li>Reflexos: Cidade 3D em Tempo Real</li>
-          </ul>
-        </button>
-      </div>
-
-      <div class="graphics-footer">
-        <span class="graphics-hint">Aplicado instantaneamente sem reiniciar &bull; Atalho: <kbd>G</kbd></span>
-        <button id="confirm-graphics-btn" class="confirm-gfx-btn" type="button">FECHAR E VOLTAR</button>
-      </div>
-    </div>
-  </div>
-
   <script type="module" src="game.js"></script>
 </body>
 </html>
-

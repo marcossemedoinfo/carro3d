@@ -5,32 +5,35 @@ import * as CANNON from 'cannon-es';
 // ============================================================================
 // 1. CONFIGURAÇÃO DE ESCALA REALISTA E PARÂMETROS DO OPEL CORSA B 1998 (FWD)
 // ============================================================================
-const CITY_SCALE = 22.0;        // Escala da cidade ajustada para pistas largas e pontes na altura real
-const CAR_SCALE = 0.62;         // Escala proporcional do Corsa ao mapa (passa livremente sob pontes e viadutos!)
-
-// Fator de escala da velocidade física no mundo para ritmo 100% natural (elimina o efeito 1.5x acelerado!)
-const WORLD_SPEED_SCALE = 0.40;
+const CITY_SCALE = 1.0;         // San Francisco já está em escala métrica real 1:1 (ruas de 15m/30m)
+const CAR_SCALE = 1.05;         // Escala real proporcional do Opel Corsa B 1998 em San Francisco
+const WORLD_SPEED_SCALE = 0.55; // Ritmo físico natural para avenidas, pontes e ladeiras reais
 
 // Grupos de colisão (bitmasks) para isolar carroceria do asfalto (sem pulinhos)
 const COLLISION_GROUND = 1;
 const COLLISION_CHASSIS = 2;
 const COLLISION_WALLS = 4;
 
-// Pontos de Spawn verificados diretamente sobre o asfalto livre de obstáculos
+// Pontos de Spawn verificados diretamente sobre o asfalto plano (ny = 1.0) de San Francisco
 const SPAWN_POINTS = [
   {
-    name: 'AVENIDA 1 (PRINCIPAL)',
-    pos: new THREE.Vector3(5.976 * CITY_SCALE, -0.42, -1.86 * CITY_SCALE),
-    yaw: 0 // Olhando para -Z (avenida principal aberta em direção à ponte)
-  },
-  {
-    name: 'AVENIDA 2 (LESTE)',
-    pos: new THREE.Vector3(10.626 * CITY_SCALE, 0.15, -7.66 * CITY_SCALE),
-    yaw: 0
+    name: 'PONTE GOLDEN GATE',
+    pos: new THREE.Vector3(-148.87, 84.42, 319.09),
+    yaw: Math.PI * 0.5 // Alinhado para -X em direção à Ponte Golden Gate
   },
   {
     name: 'AVENIDA CENTRAL',
-    pos: new THREE.Vector3(5.986 * CITY_SCALE, -0.05, -5.66 * CITY_SCALE),
+    pos: new THREE.Vector3(166.13, 84.42, 274.09),
+    yaw: 0
+  },
+  {
+    name: 'PORTO SUL (ORLA)',
+    pos: new THREE.Vector3(46.14, 42.10, -355.84),
+    yaw: 0
+  },
+  {
+    name: 'ZONA DOS TÚNEIS',
+    pos: new THREE.Vector3(121.10, 42.10, -355.84),
     yaw: 0
   }
 ];
@@ -170,9 +173,95 @@ const corsaReflectiveMaterials = {
 };
 const cityTrackedMaterials = new Set();
 
+const AUDIO_DEFAULTS = { master: 0.85, engine: 1.0, turbo: 0.90, tires: 0.95 };
+
+function getSavedAudioSettings() {
+  try {
+    const raw = localStorage.getItem('corsa3d_audio');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        master: THREE.MathUtils.clamp(Number(parsed.master ?? AUDIO_DEFAULTS.master), 0, 1),
+        engine: THREE.MathUtils.clamp(Number(parsed.engine ?? AUDIO_DEFAULTS.engine), 0, 1),
+        turbo: THREE.MathUtils.clamp(Number(parsed.turbo ?? AUDIO_DEFAULTS.turbo), 0, 1),
+        tires: THREE.MathUtils.clamp(Number(parsed.tires ?? AUDIO_DEFAULTS.tires), 0, 1)
+      };
+    }
+  } catch (e) {}
+  return { ...AUDIO_DEFAULTS };
+}
+
+const DEFAULT_KEYBINDS = {
+  accelerate: 'KeyW',
+  brake: 'KeyS',
+  steerLeft: 'KeyA',
+  steerRight: 'KeyD',
+  handbrake: 'Space',
+  gearUp: 'Equal',
+  gearDown: 'Minus',
+  transmission: 'KeyM',
+  turbo: 'KeyT',
+  headlights: 'KeyL',
+  timeOfDay: 'KeyH',
+  ignition: 'KeyI',
+  camera: 'KeyC',
+  reset: 'KeyR'
+};
+
+const KEYBIND_LABELS = [
+  { action: 'accelerate', label: 'Acelerar' },
+  { action: 'brake', label: 'Freio / Ré' },
+  { action: 'steerLeft', label: 'Virar Esquerda' },
+  { action: 'steerRight', label: 'Virar Direita' },
+  { action: 'handbrake', label: 'Freio de Mão' },
+  { action: 'gearUp', label: 'Subir Marcha' },
+  { action: 'gearDown', label: 'Reduzir Marcha' },
+  { action: 'transmission', label: 'Câmbio Auto/Manual' },
+  { action: 'turbo', label: 'Ativar / Desativar Turbo' },
+  { action: 'headlights', label: 'Ligar / Desligar Faróis' },
+  { action: 'timeOfDay', label: 'Alternar Dia / Noite' },
+  { action: 'ignition', label: 'Motor / Ignição' },
+  { action: 'camera', label: 'Trocar Câmera' },
+  { action: 'reset', label: 'Reposicionar Carro' }
+];
+
+function getSavedKeybinds() {
+  try {
+    const raw = localStorage.getItem('corsa3d_keybinds');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return { ...DEFAULT_KEYBINDS, ...parsed };
+    }
+  } catch (e) {}
+  return { ...DEFAULT_KEYBINDS };
+}
+
+function formatKeyCode(code) {
+  if (!code) return '---';
+  if (code === 'Space') return 'ESPAÇO';
+  if (code === 'Equal') return '+ / =';
+  if (code === 'Minus') return '- / _';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return 'NUM ' + code.slice(6);
+  if (code === 'ArrowUp') return 'SETA ▲';
+  if (code === 'ArrowDown') return 'SETA ▼';
+  if (code === 'ArrowLeft') return 'SETA ◀';
+  if (code === 'ArrowRight') return 'SETA ▶';
+  if (code === 'ShiftLeft' || code === 'ShiftRight') return 'SHIFT';
+  if (code === 'ControlLeft' || code === 'ControlRight') return 'CTRL';
+  return code.toUpperCase();
+}
+
 const state = {
   loaded: false,
   started: false,
+  menuOpen: true,
+  selectedMap: 'san_francisco',
+  selectedCar: 'corsa_b_1998',
+  audio: getSavedAudioSettings(),
+  keybinds: getSavedKeybinds(),
+  listeningAction: null,
   engineOn: false,
   startingEngine: false,
   timeOfDay: 'day',       // 'day', 'sunset', 'night', 'auto'
@@ -464,7 +553,7 @@ class SpatialCarAudio {
     if (starter.isPlaying) starter.stop();
     starter.setBuffer(this.rawBuffers.start);
     starter.setLoop(false);
-    starter.setVolume(0.85);
+    starter.setVolume(0.85 * state.audio.master * state.audio.engine);
     starter.setPlaybackRate(1.0);
     starter.offset = 0.05;
     starter.play();
@@ -491,7 +580,7 @@ class SpatialCarAudio {
       } catch (e) {}
     }
     turboNode.setLoop(false);
-    turboNode.setVolume(1.0);
+    turboNode.setVolume(1.0 * state.audio.master * state.audio.turbo);
     // Variação leve e realista de pitch dependendo da rotação do motor na troca de marcha
     const pitch = THREE.MathUtils.clamp(0.94 + (state.rpm / CORSA_SPECS.MaxRPM) * 0.16, 0.90, 1.15);
     turboNode.setPlaybackRate(pitch);
@@ -514,8 +603,12 @@ class SpatialCarAudio {
   update() {
     if (!this.sources.engineIdle || !this.sources.engineIdle.isPlaying) return;
     const now = this.ctx.currentTime;
+    const masterGain = state.audio.master;
+    const engGain = masterGain * state.audio.engine;
+    const turboGain = masterGain * state.audio.turbo;
+    const tireGain = masterGain * state.audio.tires;
 
-    const skidVol = THREE.MathUtils.clamp(state.skidIntensity * 0.72, 0, 0.80);
+    const skidVol = THREE.MathUtils.clamp(state.skidIntensity * 0.72, 0, 0.80) * tireGain;
     const skidPitch = THREE.MathUtils.clamp(0.90 + state.skidIntensity * 0.20 + (state.speedKmh / 220) * 0.12, 0.85, 1.28);
     this.sources.skid.gain.gain.setTargetAtTime(skidVol, now, 0.04);
     if (this.sources.skid.source) {
@@ -541,7 +634,7 @@ class SpatialCarAudio {
         }
 
         // Volume sutil, equilibrado e bem mais baixo que o ronco do motor
-        const boostVol = Math.pow(state.turboBoost, 1.5) * 0.15 * (0.30 + state.throttleInput * 0.70);
+        const boostVol = Math.pow(state.turboBoost, 1.5) * 0.15 * (0.30 + state.throttleInput * 0.70) * turboGain;
         this.turboMasterGain.gain.setTargetAtTime(boostVol, now, 0.045);
       } else {
         this.turboMasterGain.gain.setTargetAtTime(0.0, now, 0.035);
@@ -552,7 +645,7 @@ class SpatialCarAudio {
     const throttle = state.throttleInput;
 
     const idlePitch = 0.96 + rpmNorm * 0.85;
-    const idleVol = THREE.MathUtils.clamp((1.0 - rpmNorm * 0.75) * 0.70, 0.12, 0.72);
+    const idleVol = THREE.MathUtils.clamp((1.0 - rpmNorm * 0.75) * 0.70, 0.12, 0.72) * engGain;
     this.sources.engineIdle.gain.gain.setTargetAtTime(idleVol, now, 0.04);
     if (this.sources.engineIdle.source) {
       this.sources.engineIdle.source.playbackRate.setTargetAtTime(idlePitch, now, 0.035);
@@ -561,20 +654,20 @@ class SpatialCarAudio {
     const cutAttenuation = state.cuttingRev ? 0.28 : 1.0;
 
     const midPitch = 0.58 + rpmNorm * 1.15;
-    const midVol = THREE.MathUtils.clamp((rpmNorm * 0.75 + throttle * 0.25) * 0.72 * cutAttenuation, 0.0, 0.75);
+    const midVol = THREE.MathUtils.clamp((rpmNorm * 0.75 + throttle * 0.25) * 0.72 * cutAttenuation, 0.0, 0.75) * engGain;
     this.sources.engineLoad.gain.gain.setTargetAtTime(midVol, now, 0.035);
     if (this.sources.engineLoad.source) {
       this.sources.engineLoad.source.playbackRate.setTargetAtTime(midPitch, now, 0.03);
     }
 
     const highPitch = 0.55 + rpmNorm * 1.12;
-    const highVol = THREE.MathUtils.clamp(Math.pow(rpmNorm, 1.1) * (0.50 + throttle * 0.45) * 0.78 * cutAttenuation, 0.0, 0.82);
+    const highVol = THREE.MathUtils.clamp(Math.pow(rpmNorm, 1.1) * (0.50 + throttle * 0.45) * 0.78 * cutAttenuation, 0.0, 0.82) * engGain;
     this.sources.exhaustLoad.gain.gain.setTargetAtTime(highVol, now, 0.035);
     if (this.sources.exhaustLoad.source) {
       this.sources.exhaustLoad.source.playbackRate.setTargetAtTime(highPitch, now, 0.03);
     }
 
-    const revCutVol = state.cuttingRev ? 0.42 : 0.0;
+    const revCutVol = (state.cuttingRev ? 0.42 : 0.0) * engGain;
     this.sources.revCutExhaust.gain.gain.setTargetAtTime(revCutVol, now, 0.025);
     this.sources.revCutEngine.gain.gain.setTargetAtTime(revCutVol * 0.60, now, 0.025);
   }
@@ -1021,29 +1114,67 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
 // ============================================================================
 // 6. COLISÃO ESTÁTICA SÓLIDA DO MAPA (ASFALTO 100% CONTÍNUO + OBSTÁCULOS SECTORIZADOS)
 // ============================================================================
+function getObjectNodePath(obj, stopAt) {
+  const parts = [];
+  let cur = obj;
+  while (cur && cur !== stopAt) {
+    if (cur.name) parts.push(cur.name.toLowerCase());
+    cur = cur.parent;
+  }
+  return parts.reverse().join('/');
+}
+
 async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial, wallMaterial, onProgress) {
   cityScene.updateMatrixWorld(true);
 
+  const ignoredSubtreePatterns = ['lod1', 'lod_b', 'challangemode', 'collectablesallzones'];
   const meshes = [];
+
   cityScene.traverse((child) => {
     child.matrixAutoUpdate = false;
+    const nodeName = (child.name || '').toLowerCase();
+    if (ignoredSubtreePatterns.some((pat) => nodeName.includes(pat))) {
+      child.visible = false;
+      return;
+    }
+
     if (child.isMesh && child.geometry && child.geometry.attributes.position) {
-      child.castShadow = false;
-      child.receiveShadow = false;
+      const path = getObjectNodePath(child, cityScene);
+      if (ignoredSubtreePatterns.some((pat) => path.includes(pat))) {
+        child.visible = false;
+        return;
+      }
+
+      const isNetworkBoundWall = path.includes('wall_11') || path.includes('networkbound');
+      if (isNetworkBoundWall) {
+        child.visible = false;
+      } else {
+        child.castShadow = false;
+        child.receiveShadow = false;
+      }
+
+      // Garante que casas espelhadas (determinante negativo) renderizem faces externas corretamente
+      const isMirrored = child.matrixWorld.determinant() < 0;
       const mats = Array.isArray(child.material) ? child.material : [child.material];
       mats.forEach((m) => {
-        if (m && !cityTrackedMaterials.has(m)) {
+        if (!m) return;
+        if (isMirrored && m.side !== THREE.DoubleSide) {
+          m.side = THREE.DoubleSide;
+          m.needsUpdate = true;
+        }
+        if (!cityTrackedMaterials.has(m)) {
           cityTrackedMaterials.add(m);
-          // Reduz o ganho de IBL nos prédios e no asfalto para evitar iluminação estourada durante o dia
           m.envMapIntensity = 0.22;
         }
       });
-      meshes.push(child);
+
+      meshes.push({ mesh: child, path, isNetworkBoundWall });
     }
   });
 
-  const ROAD_SECTOR_SIZE = 40.0;
+  const ROAD_SECTOR_SIZE = 45.0;
   const roadSectorMap = new Map();
+  const minimapRoadSectorMap = new Map();
 
   const wallSegments = [];
   const dedupWallSet = new Set();
@@ -1056,22 +1187,97 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   const normal = new THREE.Vector3();
   const meshAABB = new THREE.Box3();
 
+  const PLAY_MIN_X = -920.0;
+  const PLAY_MAX_X = 920.0;
+  const PLAY_MIN_Z = -720.0;
+  const PLAY_MAX_Z = 720.0;
+  const PLAY_MIN_Y = 14.0;
+  const PLAY_MAX_Y = 115.0;
+
+  function appendTriToSector(sectorMap, sx, sz, ax, ay, az, bx, by, bz, cx, cy, cz) {
+    const sKey = `${sx}_${sz}`;
+    let sRoad = sectorMap.get(sKey);
+    if (!sRoad) {
+      sRoad = { verts: [], indices: [], offset: 0 };
+      sectorMap.set(sKey, sRoad);
+    }
+    sRoad.verts.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+    sRoad.indices.push(sRoad.offset, sRoad.offset + 1, sRoad.offset + 2);
+    sRoad.offset += 3;
+  }
+
+  function pushWallSegment(ax, az, bx, bz, midY, wallHeight) {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const totalLen = Math.hypot(dx, dz);
+    if (totalLen < 0.25) return;
+
+    const angleY = Math.atan2(dx, dz);
+    const angBucket = Math.round(((angleY % Math.PI) + Math.PI) % Math.PI / (Math.PI / 12));
+    const subCount = Math.max(1, Math.ceil(totalLen / 14.0));
+    const segLen = (totalLen / subCount) + 0.35;
+
+    for (let s = 0; s < subCount; s++) {
+      const t = (s + 0.5) / subCount;
+      const cx = ax + dx * t;
+      const cz = az + dz * t;
+      const gx = Math.round(cx * 0.55);
+      const gy = Math.round(midY * 0.25);
+      const gz = Math.round(cz * 0.55);
+      const wallKey = `${gx}_${gy}_${gz}_${angBucket}`;
+
+      if (!dedupWallSet.has(wallKey)) {
+        dedupWallSet.add(wallKey);
+        wallSegments.push({
+          x: cx,
+          y: midY,
+          z: cz,
+          len: Math.max(0.9, segLen),
+          height: wallHeight,
+          angleY
+        });
+      }
+    }
+  }
+
   const totalMeshes = meshes.length;
 
   for (let m = 0; m < totalMeshes; m++) {
-    const mesh = meshes[m];
+    const { mesh, path, isNetworkBoundWall } = meshes[m];
     const geom = mesh.geometry;
     const pos = geom.attributes.position;
 
-    // Descarte instantâneo por AABB do Mesh: se todo o objeto estiver acima ou abaixo da zona transitável, ignora!
     if (!geom.boundingBox) geom.computeBoundingBox();
     meshAABB.copy(geom.boundingBox).applyMatrix4(mesh.matrixWorld);
-    if (meshAABB.min.y > 6.5 || meshAABB.max.y < -3.0) {
+
+    if (
+      meshAABB.max.x < PLAY_MIN_X || meshAABB.min.x > PLAY_MAX_X ||
+      meshAABB.max.z < PLAY_MIN_Z || meshAABB.min.z > PLAY_MAX_Z ||
+      meshAABB.max.y < PLAY_MIN_Y || meshAABB.min.y > 260.0
+    ) {
       continue;
     }
 
-    // Ativa recepção de sombra apenas nas malhas próximas ao nível da pista onde o carro trafega
-    if (meshAABB.min.y < 1.8 && meshAABB.max.y > -2.5) {
+    if (path.includes('water_') || path.includes('/water') || path.includes('ocean')) {
+      continue;
+    }
+
+    const isStreetOrBridge =
+      path.includes('road_') ||
+      path.includes('streets') ||
+      path.includes('pavement') ||
+      path.includes('lombard') ||
+      path.includes('ramp') ||
+      path.includes('bridge_01_connection') ||
+      path.includes('bridge_segment_01_03') ||
+      path.includes('sidewalk') ||
+      path.includes('tunnel');
+
+    const isGroundSurface =
+      !isNetworkBoundWall &&
+      (isStreetOrBridge || path.includes('terrain_01') || path.includes('concrete_01'));
+
+    if (isGroundSurface && meshAABB.min.y < 105.0 && meshAABB.max.y > 25.0) {
       mesh.receiveShadow = true;
     }
 
@@ -1089,8 +1295,11 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
 
       const minY = Math.min(v0.y, v1.y, v2.y);
       const maxY = Math.max(v0.y, v1.y, v2.y);
+      if (minY > PLAY_MAX_Y || maxY < PLAY_MIN_Y) continue;
 
-      if (minY > 6.0 || maxY < -2.6) continue;
+      const midX = (v0.x + v1.x + v2.x) / 3;
+      const midZ = (v0.z + v1.z + v2.z) / 3;
+      if (midX < PLAY_MIN_X || midX > PLAY_MAX_X || midZ < PLAY_MIN_Z || midZ > PLAY_MAX_Z) continue;
 
       edge1.subVectors(v1, v0);
       edge2.subVectors(v2, v0);
@@ -1100,27 +1309,18 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       if (doubleArea < 0.0005) continue;
       normal.divideScalar(doubleArea);
 
-      // 1. Asfalto, Avenidas, Calçadas, Pontes, Viadutos e Rampas: superfícies transitáveis (normal.y > 0.45)
-      // Agrupamos por setores de 40m x 40m para que cada CANNON.Trimesh tenha no máximo ~1.700 triângulos,
-      // eliminando buracos no asfalto e evitando o estouro do Int16Array do Cannon-es (< 32.767)!
-      if (normal.y > 0.45 && maxY < 5.8 && minY > -2.5) {
-        const midX = (v0.x + v1.x + v2.x) / 3;
-        const midZ = (v0.z + v1.z + v2.z) / 3;
+      // 1. Asfalto, Calçadas, Ladeiras, Pontes e Terreno de San Francisco (apenas topo normal.y > 0.35)
+      if (isGroundSurface && normal.y > 0.35 && maxY <= 102.0) {
         const sx = Math.floor(midX / ROAD_SECTOR_SIZE);
         const sz = Math.floor(midZ / ROAD_SECTOR_SIZE);
-        const sKey = `${sx}_${sz}`;
+        appendTriToSector(roadSectorMap, sx, sz, v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
 
-        let sRoad = roadSectorMap.get(sKey);
-        if (!sRoad) {
-          sRoad = { verts: [], indices: [], offset: 0 };
-          roadSectorMap.set(sKey, sRoad);
+        if (isStreetOrBridge) {
+          appendTriToSector(minimapRoadSectorMap, sx, sz, v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
         }
-        sRoad.verts.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-        sRoad.indices.push(sRoad.offset, sRoad.offset + 1, sRoad.offset + 2);
-        sRoad.offset += 3;
       }
-      // 2. Cercas, Muretas, Guardrails e Fachadas de Prédios nas avenidas e pontes
-      else if (Math.abs(normal.y) < 0.35 && (maxY - minY) > 0.40 && minY < 4.5 && maxY > -1.8) {
+      // 2. Paredes, Prédios, Guardrails da Ponte, Túneis e Limites de San Francisco
+      else if (Math.abs(normal.y) < 0.48 && (maxY - minY) > 0.35 && minY <= 95.0 && maxY >= 36.0) {
         let maxDist2D = 0;
         let bestA = v0;
         let bestB = v1;
@@ -1132,44 +1332,29 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
         const d20 = Math.hypot(v0.x - v2.x, v0.z - v2.z);
         if (d20 > maxDist2D) { maxDist2D = d20; bestA = v2; bestB = v0; }
 
-        if (maxDist2D >= 0.70) {
-          const midX = (bestA.x + bestB.x) * 0.5;
+        if (maxDist2D >= 0.30) {
           const midY = (minY + maxY) * 0.5;
-          const midZ = (bestA.z + bestB.z) * 0.5;
-          const angleY = Math.atan2(bestB.x - bestA.x, bestB.z - bestA.z);
-
-          const dedupKey = `${Math.round(midX / 2.5)}_${Math.round(midZ / 2.5)}_${Math.round(midY / 1.5)}_${Math.round(angleY * 1.5)}`;
-          if (!dedupWallSet.has(dedupKey)) {
-            dedupWallSet.add(dedupKey);
-            wallSegments.push({
-              x: midX,
-              y: midY,
-              z: midZ,
-              len: Math.max(0.8, Math.min(maxDist2D, 6.0)),
-              height: Math.max(0.8, Math.min(maxY - minY, 2.5)),
-              angleY
-            });
-          }
+          // Altura integral da fachada para impedir que caixas flutuem acima da rua em prédios altos
+          const wallHeight = Math.max(1.2, maxY - minY);
+          pushWallSegment(bestA.x, bestA.z, bestB.x, bestB.z, midY, wallHeight);
         }
       }
     }
 
-    // Libera a thread do navegador periodicamente para atualização fluida da barra de progresso
-    if (m % 120 === 0) {
+    if (m % 80 === 0) {
       if (onProgress) {
         const pct = Math.round((m / totalMeshes) * 100);
-        onProgress(pct, `Processando geometria do mapa 3D (${pct}%)...`);
+        onProgress(pct, `Processando geometria de San Francisco (${pct}%)...`);
       }
       await new Promise((r) => setTimeout(r, 0));
     }
   }
 
   if (onProgress) {
-    onProgress(90, 'Construindo malha física do asfalto contínuo...');
+    onProgress(90, 'Construindo malha física do asfalto e pontes...');
   }
   await new Promise((r) => setTimeout(r, 0));
 
-  // Cria os corpos sólidos de Asfalto setorizados (Trimesh ultra-estável por setor)
   let totalRoadTris = 0;
   roadSectorMap.forEach((sRoad) => {
     if (sRoad.verts.length === 0) return;
@@ -1186,12 +1371,10 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   });
 
   if (onProgress) {
-    onProgress(95, 'Distribuindo obstáculos e cercas em setores espaciais otimizados...');
+    onProgress(95, 'Solidificando prédios, guardrails e limites...');
   }
   await new Promise((r) => setTimeout(r, 0));
 
-  // Agrupamento dos obstáculos em corpos espaciais independentes (Setores 35m x 35m)
-  // Isso elimina a lentidão O(N²) de adicionar milhares de formas em um único corpo!
   const SECTOR_SIZE = 35.0;
   const sectorGroups = new Map();
 
@@ -1223,7 +1406,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       sectorBody.collisionFilterMask = COLLISION_CHASSIS;
 
       chunk.forEach((seg) => {
-        const box = new CANNON.Box(new CANNON.Vec3(0.20, seg.height * 0.5, seg.len * 0.5));
+        const box = new CANNON.Box(new CANNON.Vec3(0.38, seg.height * 0.5, seg.len * 0.5));
         qWall.setFromEuler(0, seg.angleY, 0);
         sectorBody.addShape(box, new CANNON.Vec3(seg.x, seg.y, seg.z), qWall);
       });
@@ -1238,17 +1421,17 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     shape: new CANNON.Plane()
   });
   safetyPlane.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  safetyPlane.position.set(0, -3.5, 0);
+  safetyPlane.position.set(0, 2.0, 0);
   safetyPlane.collisionFilterGroup = COLLISION_GROUND | COLLISION_WALLS;
   safetyPlane.collisionFilterMask = COLLISION_CHASSIS | COLLISION_GROUND;
   physicsWorld.addBody(safetyPlane);
 
   console.log(
-    `Mapa 3D Carregado com sucesso: ${totalRoadTris} triângulos de asfalto em ${roadSectorMap.size} setores e ${wallSegments.length} obstáculos em ${sectorGroups.size} setores espaciais!`
+    `San Francisco carregado: ${totalRoadTris} triângulos de via em ${roadSectorMap.size} setores e ${wallSegments.length} barreiras sólidas em ${sectorGroups.size} setores!`
   );
 
   if (minimapRenderer) {
-    minimapRenderer.buildRoadPaths(roadSectorMap, wallSegments);
+    minimapRenderer.buildRoadPaths(minimapRoadSectorMap.size > 0 ? minimapRoadSectorMap : roadSectorMap, wallSegments);
   }
 }
 
@@ -2141,8 +2324,10 @@ class EnvironmentTimeSystem {
     const btnTod = document.getElementById('btn-tod');
     const mTodTxt = document.getElementById('m-tod-txt');
     const mBtnTod = document.getElementById('mbtn-tod');
+    const menuTodLabel = document.getElementById('menu-tod-label');
 
     if (todLabel) todLabel.textContent = this.getLabel();
+    if (menuTodLabel) menuTodLabel.textContent = this.getLabel();
     if (btnTod) {
       btnTod.classList.remove('tod-day', 'tod-sunset', 'tod-night', 'tod-auto');
       btnTod.classList.add(this.getHudClass());
@@ -2239,11 +2424,9 @@ function applyGraphicsQuality(qualityKey) {
   }
 
   // 7. Atualiza UI e badges
-  const gfxLabel = document.getElementById('graphics-label');
-  const startBadge = document.getElementById('start-graphics-badge');
+  const summaryGfx = document.getElementById('summary-gfx-name');
   const mGfxTxt = document.getElementById('m-graphics-txt');
-  if (gfxLabel) gfxLabel.textContent = preset.label;
-  if (startBadge) startBadge.textContent = preset.label;
+  if (summaryGfx) summaryGfx.textContent = preset.label;
   if (mGfxTxt) mGfxTxt.textContent = preset.label;
 
   document.querySelectorAll('.gfx-preset-card').forEach((card) => {
@@ -2252,13 +2435,18 @@ function applyGraphicsQuality(qualityKey) {
 }
 
 function toggleGraphicsModal(forceOpen) {
-  const modal = document.getElementById('graphics-modal');
-  if (!modal) return;
-  const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : modal.classList.contains('hud-hidden');
-  state.graphicsMenuOpen = shouldOpen;
-  modal.classList.toggle('hud-hidden', !shouldOpen);
-  if (shouldOpen) {
-    releaseAllInputs();
+  if (typeof forceOpen === 'boolean') {
+    if (forceOpen) {
+      openGameMenu('panel-options', 'tab-graphics');
+    } else {
+      closeGameMenu();
+    }
+    return;
+  }
+  if (state.menuOpen) {
+    closeGameMenu();
+  } else {
+    openGameMenu('panel-options', 'tab-graphics');
   }
 }
 // Mundo Físico Cannon-es
@@ -2381,7 +2569,7 @@ async function initSimulation() {
     updateLoadingProgress(38);
     const cityGltf = await new Promise((res, rej) => {
       gltfLoader.load(
-        './city.glb',
+        './San Francisco.glb',
         res,
         (xhr) => {
           if (xhr.total) {
@@ -2412,6 +2600,8 @@ async function initSimulation() {
 
     state.loaded = true;
     updateLoadingProgress(100);
+    const progressSection = document.getElementById('progress-section');
+    if (progressSection) progressSection.classList.add('hud-hidden');
     startBtn.disabled = false;
   } catch (err) {
     console.error('Erro ao inicializar simulação:', err);
@@ -2472,10 +2662,10 @@ function setupCorsaPhysics(comOffsetY) {
 }
 
 function resetCarToSpawn(spawnIndex = state.spawnIdx) {
-  state.spawnIdx = spawnIndex % SPAWN_POINTS.length;
+  state.spawnIdx = ((spawnIndex % SPAWN_POINTS.length) + SPAWN_POINTS.length) % SPAWN_POINTS.length;
   const sp = SPAWN_POINTS[state.spawnIdx];
 
-  chassisBody.position.set(sp.pos.x, sp.pos.y + 0.35, sp.pos.z);
+  chassisBody.position.set(sp.pos.x, sp.pos.y + 0.55, sp.pos.z);
   chassisBody.velocity.setZero();
   chassisBody.angularVelocity.setZero();
   chassisBody.quaternion.setFromEuler(0, sp.yaw, 0);
@@ -2484,7 +2674,6 @@ function resetCarToSpawn(spawnIndex = state.spawnIdx) {
   state.rpm = state.engineOn ? CORSA_SPECS.IdleRPM : 0;
   state.gear = 1;
   state.currentSteer = 0;
-  // Zera estados residuais (turbo, derrapagem, pedais) para não "herdar" efeitos após reposicionar
   state.turboBoost = 0;
   state.skidIntensity = 0;
   state.throttleInput = 0;
@@ -2493,11 +2682,14 @@ function resetCarToSpawn(spawnIndex = state.spawnIdx) {
   state.cuttingRev = false;
   for (let i = 0; i < 4; i++) state.wheelSkids[i] = 0;
 
-  camCurrentPos.set(sp.pos.x, sp.pos.y + 1.4, sp.pos.z + 3.6);
-  camCurrentLook.set(sp.pos.x, sp.pos.y + 0.25, sp.pos.z - 1.5);
+  const backX = Math.sin(sp.yaw) * 4.2;
+  const backZ = Math.cos(sp.yaw) * 4.2;
+  camCurrentPos.set(sp.pos.x + backX, sp.pos.y + 2.0, sp.pos.z + backZ);
+  camCurrentLook.set(sp.pos.x - backX * 0.5, sp.pos.y + 0.6, sp.pos.z - backZ * 0.5);
 
-  const spawnLabel = document.getElementById('spawn-label');
-  if (spawnLabel) spawnLabel.textContent = `AVENIDA ${state.spawnIdx + 1}`;
+  document.querySelectorAll('.spawn-chip').forEach((chip) => {
+    chip.classList.toggle('active', Number(chip.dataset.spawn) === state.spawnIdx);
+  });
 }
 
 // ============================================================================
@@ -3038,7 +3230,7 @@ function drawTachometer() {
   const h = tachoCanvas.height;
   const cx = w / 2;
   const cy = h / 2;
-  const r = 98;
+  const r = Math.min(w, h) * 0.5 - 12;
 
   tachoCtx.clearRect(0, 0, w, h);
 
@@ -3049,7 +3241,7 @@ function drawTachometer() {
   tachoCtx.beginPath();
   tachoCtx.arc(cx, cy, r, startAngle, endAngle);
   tachoCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-  tachoCtx.lineWidth = 12;
+  tachoCtx.lineWidth = 11;
   tachoCtx.lineCap = 'round';
   tachoCtx.stroke();
 
@@ -3057,7 +3249,7 @@ function drawTachometer() {
   tachoCtx.beginPath();
   tachoCtx.arc(cx, cy, r, redStart, endAngle);
   tachoCtx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
-  tachoCtx.lineWidth = 12;
+  tachoCtx.lineWidth = 11;
   tachoCtx.stroke();
 
   const rpmClamped = THREE.MathUtils.clamp(state.rpm, 0, 7000);
@@ -3066,38 +3258,38 @@ function drawTachometer() {
     tachoCtx.beginPath();
     tachoCtx.arc(cx, cy, r, startAngle, rpmAngle);
     tachoCtx.strokeStyle = state.cuttingRev || state.rpm >= CORSA_SPECS.RedlineRPM ? '#ef4444' : '#38bdf8';
-    tachoCtx.lineWidth = 12;
+    tachoCtx.lineWidth = 11;
     tachoCtx.lineCap = 'round';
     tachoCtx.stroke();
   }
 
-  tachoCtx.font = 'bold 12px Segoe UI, sans-serif';
+  tachoCtx.font = 'bold 11px Segoe UI, sans-serif';
   tachoCtx.textAlign = 'center';
   tachoCtx.textBaseline = 'middle';
 
   for (let i = 0; i <= 7; i++) {
     const a = startAngle + (i / 7) * totalSweep;
-    const x1 = cx + Math.cos(a) * (r - 10);
-    const y1 = cy + Math.sin(a) * (r - 10);
-    const x2 = cx + Math.cos(a) * (r + 4);
-    const y2 = cy + Math.sin(a) * (r + 4);
+    const x1 = cx + Math.cos(a) * (r - 9);
+    const y1 = cy + Math.sin(a) * (r - 9);
+    const x2 = cx + Math.cos(a) * (r + 3);
+    const y2 = cy + Math.sin(a) * (r + 3);
 
     tachoCtx.beginPath();
     tachoCtx.moveTo(x1, y1);
     tachoCtx.lineTo(x2, y2);
     tachoCtx.strokeStyle = i >= 6 ? '#ef4444' : '#cbd5e1';
-    tachoCtx.lineWidth = 2.5;
+    tachoCtx.lineWidth = 2.2;
     tachoCtx.stroke();
 
-    const tx = cx + Math.cos(a) * (r - 24);
-    const ty = cy + Math.sin(a) * (r - 24);
+    const tx = cx + Math.cos(a) * (r - 22);
+    const ty = cy + Math.sin(a) * (r - 22);
     tachoCtx.fillStyle = i >= 6 ? '#ef4444' : '#94a3b8';
     tachoCtx.fillText(String(i), tx, ty);
   }
 
   // Medidor interno de Pressão do Turbo (0.0 a 1.5 BAR)
   if (state.turboInstalled) {
-    const rTurbo = 74;
+    const rTurbo = r - 30;
     tachoCtx.beginPath();
     tachoCtx.arc(cx, cy, rTurbo, startAngle, endAngle);
     tachoCtx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
@@ -3109,29 +3301,11 @@ function drawTachometer() {
       tachoCtx.beginPath();
       tachoCtx.arc(cx, cy, rTurbo, startAngle, turboAngle);
       tachoCtx.strokeStyle = state.turboBoost >= 0.82 ? '#ef4444' : '#f59e0b';
-      tachoCtx.lineWidth = 5;
+      tachoCtx.lineWidth = 4.5;
       tachoCtx.lineCap = 'round';
       tachoCtx.stroke();
     }
   }
-
-  const needleAngle = rpmAngle;
-  tachoCtx.save();
-  tachoCtx.translate(cx, cy);
-  tachoCtx.rotate(needleAngle);
-  tachoCtx.beginPath();
-  tachoCtx.moveTo(-14, 0);
-  tachoCtx.lineTo(r - 8, 0);
-  tachoCtx.strokeStyle = '#f59e0b';
-  tachoCtx.lineWidth = 3.5;
-  tachoCtx.lineCap = 'round';
-  tachoCtx.stroke();
-  tachoCtx.restore();
-
-  tachoCtx.beginPath();
-  tachoCtx.arc(cx, cy, 7, 0, Math.PI * 2);
-  tachoCtx.fillStyle = '#f59e0b';
-  tachoCtx.fill();
 }
 
 const hudDom = {
@@ -3314,14 +3488,20 @@ function changeGear(newGear) {
 
 function toggleTransmissionMode() {
   state.transmission = state.transmission === 'MANUAL' ? 'AUTO' : 'MANUAL';
-  document.getElementById('trans-label').textContent = state.transmission === 'MANUAL' ? 'MANUAL' : 'AUTOMÁTICO';
+  const transLabel = document.getElementById('trans-label');
+  const menuTransLabel = document.getElementById('menu-trans-label');
+  const text = state.transmission === 'MANUAL' ? 'MANUAL' : 'AUTOMÁTICO';
+  if (transLabel) transLabel.textContent = text;
+  if (menuTransLabel) menuTransLabel.textContent = text;
 }
 
 function toggleHeadlights() {
   state.headlightsOn = !state.headlightsOn;
   const btn = document.getElementById('btn-lights');
   const label = document.getElementById('lights-label');
+  const menuLabel = document.getElementById('menu-lights-label');
   if (label) label.textContent = state.headlightsOn ? 'ON' : 'OFF';
+  if (menuLabel) menuLabel.textContent = state.headlightsOn ? 'ON' : 'OFF';
   if (btn) btn.classList.toggle('lights-on', state.headlightsOn);
 }
 
@@ -3332,22 +3512,26 @@ function toggleEngineIgnition() {
 
   if (!state.engineOn) {
     state.startingEngine = true;
-    label.textContent = 'PARTIDA...';
+    if (label) label.textContent = 'PARTIDA...';
     carAudio.triggerIgnition(() => {
       state.engineOn = true;
       state.startingEngine = false;
       state.rpm = CORSA_SPECS.IdleRPM;
-      btn.classList.remove('engine-off');
-      btn.classList.add('engine-on');
-      label.textContent = 'LIGADO';
+      if (btn) {
+        btn.classList.remove('engine-off');
+        btn.classList.add('engine-on');
+      }
+      if (label) label.textContent = 'LIGADO';
     });
   } else {
     state.engineOn = false;
     state.rpm = 0;
     carAudio.shutDownEngine();
-    btn.classList.remove('engine-on');
-    btn.classList.add('engine-off');
-    label.textContent = 'DESLIGADO';
+    if (btn) {
+      btn.classList.remove('engine-on');
+      btn.classList.add('engine-off');
+    }
+    if (label) label.textContent = 'DESLIGADO';
   }
 }
 
@@ -3382,48 +3566,87 @@ function cycleCameraMode() {
   state.orbitYaw = state.cameraMode === 3 ? Math.PI * 0.35 : 0;
   state.orbitPitch = 0.18;
   const label = document.getElementById('cam-label');
+  const menuCamLabel = document.getElementById('menu-camera-label');
   if (label) label.textContent = CAMERA_MODE_NAMES[state.cameraMode];
+  if (menuCamLabel) menuCamLabel.textContent = CAMERA_MODE_NAMES[state.cameraMode];
+}
+
+function isActionCodeMatch(e, action) {
+  const bound = state.keybinds[action];
+  if (e.code === bound) return true;
+  if (action === 'accelerate' && e.code === 'ArrowUp') return true;
+  if (action === 'brake' && e.code === 'ArrowDown') return true;
+  if (action === 'steerLeft' && e.code === 'ArrowLeft') return true;
+  if (action === 'steerRight' && e.code === 'ArrowRight') return true;
+  if (action === 'gearUp' && e.code === 'NumpadAdd') return true;
+  if (action === 'gearDown' && e.code === 'NumpadSubtract') return true;
+  return false;
 }
 
 window.addEventListener('keydown', (e) => {
-  if (!state.started) {
-    if (e.key.toLowerCase() === 'g' && !e.repeat) toggleGraphicsModal();
-    if (e.key === 'Escape' && state.graphicsMenuOpen) toggleGraphicsModal(false);
+  // Modo de captura de nova tecla no menu Opções -> Atribuir Teclas
+  if (state.listeningAction) {
+    e.preventDefault();
+    e.stopPropagation();
+    const action = state.listeningAction;
+    state.listeningAction = null;
+    if (e.code !== 'Escape') {
+      state.keybinds[action] = e.code;
+      try {
+        localStorage.setItem('corsa3d_keybinds', JSON.stringify(state.keybinds));
+      } catch (err) {}
+    }
+    renderKeybindsUI();
     return;
   }
-  const k = e.key.toLowerCase();
 
-  if (k === 'w' || e.key === 'ArrowUp') keys.w = true;
-  if (k === 's' || e.key === 'ArrowDown') keys.s = true;
-  if (k === 'a' || e.key === 'ArrowLeft') keys.a = true;
-  if (k === 'd' || e.key === 'ArrowRight') keys.d = true;
-  if (e.code === 'Space') {
+  if (e.code === 'Escape' && !e.repeat) {
+    if (state.started) {
+      if (state.menuOpen) {
+        closeGameMenu();
+      } else {
+        openGameMenu('menu-home');
+      }
+    } else if (state.menuOpen) {
+      switchMenuView('menu-home');
+    }
+    return;
+  }
+
+  if (state.menuOpen || !state.started) {
+    if (e.code === state.keybinds.timeOfDay && !e.repeat) cycleTimeOfDay();
+    return;
+  }
+
+  if (isActionCodeMatch(e, 'accelerate')) keys.w = true;
+  if (isActionCodeMatch(e, 'brake')) keys.s = true;
+  if (isActionCodeMatch(e, 'steerLeft')) keys.a = true;
+  if (isActionCodeMatch(e, 'steerRight')) keys.d = true;
+  if (isActionCodeMatch(e, 'handbrake')) {
     keys.space = true;
     e.preventDefault();
   }
 
   if (!e.repeat) {
-    if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' || e.code === 'Equal') {
+    if (isActionCodeMatch(e, 'gearUp')) {
       changeGear(state.gear + 1);
-    } else if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract' || e.code === 'Minus') {
+    } else if (isActionCodeMatch(e, 'gearDown')) {
       changeGear(state.gear - 1);
-    } else if (k === 'm') {
+    } else if (isActionCodeMatch(e, 'transmission')) {
       toggleTransmissionMode();
-    } else if (k === 't') {
+    } else if (isActionCodeMatch(e, 'turbo')) {
       setTurboInstalled(!state.turboInstalled);
-    } else if (k === 'l') {
+    } else if (isActionCodeMatch(e, 'headlights')) {
       toggleHeadlights();
-    } else if (k === 'h') {
+    } else if (isActionCodeMatch(e, 'timeOfDay')) {
       cycleTimeOfDay();
-    } else if (k === 'g') {
+    } else if (e.code === 'KeyG') {
       toggleGraphicsModal();
-    } else if (e.key === 'Escape' && state.graphicsMenuOpen) {
-      toggleGraphicsModal(false);
-    } else if (k === 'i') {
+    } else if (isActionCodeMatch(e, 'ignition')) {
       toggleEngineIgnition();
-    } else if (k === 'c') {
+    } else if (isActionCodeMatch(e, 'camera')) {
       cycleCameraMode();
-    } else if (k === 'r') {
+    } else if (isActionCodeMatch(e, 'reset')) {
       resetCarToSpawn(state.spawnIdx);
     }
   }
@@ -3450,12 +3673,11 @@ document.addEventListener('visibilitychange', () => {
 });
 
 window.addEventListener('keyup', (e) => {
-  const k = e.key.toLowerCase();
-  if (k === 'w' || e.key === 'ArrowUp') keys.w = false;
-  if (k === 's' || e.key === 'ArrowDown') keys.s = false;
-  if (k === 'a' || e.key === 'ArrowLeft') keys.a = false;
-  if (k === 'd' || e.key === 'ArrowRight') keys.d = false;
-  if (e.code === 'Space') keys.space = false;
+  if (isActionCodeMatch(e, 'accelerate')) keys.w = false;
+  if (isActionCodeMatch(e, 'brake')) keys.s = false;
+  if (isActionCodeMatch(e, 'steerLeft')) keys.a = false;
+  if (isActionCodeMatch(e, 'steerRight')) keys.d = false;
+  if (isActionCodeMatch(e, 'handbrake')) keys.space = false;
 });
 
 renderer.domElement.addEventListener('pointerdown', () => {
@@ -3503,7 +3725,7 @@ function setMobileMode(enabled) {
     document.body.classList.remove('mobile-active');
   }
 
-  if (state.started) {
+  if (state.started && !state.menuOpen) {
     if (enabled) {
       mobileControls?.classList.remove('hud-hidden');
       topHud?.classList.add('hud-hidden');
@@ -3766,28 +3988,204 @@ function setupTurboControls() {
   });
 }
 
-startBtn.addEventListener('click', () => {
-  if (!state.loaded || state.started) return;
-  state.started = true;
+function switchMenuView(viewId, tabId = null) {
+  document.querySelectorAll('.menu-view').forEach((v) => {
+    v.classList.toggle('active', v.id === viewId);
+  });
+  if (tabId && viewId === 'panel-options') {
+    document.querySelectorAll('.opt-tab-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tab === tabId);
+    });
+    document.querySelectorAll('.opt-tab-content').forEach((tab) => {
+      tab.classList.toggle('active', tab.id === tabId);
+    });
+  }
+}
 
-  document.getElementById('loading-overlay').classList.add('hud-hidden');
-  document.getElementById('dashboard-hud').classList.remove('hud-hidden');
+function openGameMenu(viewId = 'menu-home', tabId = null) {
+  state.menuOpen = true;
+  state.listeningAction = null;
+  releaseAllInputs();
+  const overlay = document.getElementById('loading-overlay');
+  if (overlay) overlay.classList.remove('hud-hidden');
+  document.getElementById('dashboard-hud')?.classList.add('hud-hidden');
+  document.getElementById('minimap-container')?.classList.add('hud-hidden');
+  document.getElementById('mobile-controls')?.classList.add('hud-hidden');
+
+  if (state.started) {
+    const startSpan = startBtn?.querySelector('span');
+    if (startSpan) startSpan.textContent = '▶ CONTINUAR JOGO';
+    document.getElementById('btn-pause-reset')?.classList.remove('hud-hidden');
+  }
+  switchMenuView(viewId, tabId);
+}
+
+function closeGameMenu() {
+  if (!state.loaded) return;
+  state.menuOpen = false;
+  state.listeningAction = null;
+  document.getElementById('loading-overlay')?.classList.add('hud-hidden');
+  document.getElementById('dashboard-hud')?.classList.remove('hud-hidden');
   document.getElementById('minimap-container')?.classList.remove('hud-hidden');
-
   setMobileMode(state.mobileMode);
-  setTurboInstalled(state.turboInstalled);
+}
 
-  carAudio.startContinuousLoops();
-  toggleEngineIgnition();
+function applyAudioSettings() {
+  try {
+    localStorage.setItem('corsa3d_audio', JSON.stringify(state.audio));
+  } catch (e) {}
+
+  const pairs = [
+    ['vol-master', 'vol-master-val', state.audio.master],
+    ['vol-engine', 'vol-engine-val', state.audio.engine],
+    ['vol-turbo', 'vol-turbo-val', state.audio.turbo],
+    ['vol-tires', 'vol-tires-val', state.audio.tires]
+  ];
+  pairs.forEach(([inputId, valId, frac]) => {
+    const inp = document.getElementById(inputId);
+    const lbl = document.getElementById(valId);
+    const pct = Math.round(frac * 100);
+    if (inp) inp.value = String(pct);
+    if (lbl) lbl.textContent = `${pct}%`;
+  });
+}
+
+function renderKeybindsUI() {
+  const list = document.getElementById('keybinds-list');
+  if (!list) return;
+  list.innerHTML = '';
+
+  KEYBIND_LABELS.forEach(({ action, label }) => {
+    const row = document.createElement('div');
+    row.className = 'keybind-row';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'keybind-name';
+    nameEl.textContent = label;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'keybind-btn';
+    if (state.listeningAction === action) {
+      btn.classList.add('listening');
+      btn.textContent = 'PRESSIONE...';
+    } else {
+      btn.textContent = formatKeyCode(state.keybinds[action]);
+    }
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.listeningAction = state.listeningAction === action ? null : action;
+      renderKeybindsUI();
+    });
+
+    row.appendChild(nameEl);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+function setupGameMenuAndOptions() {
+  document.getElementById('btn-open-options')?.addEventListener('click', () => switchMenuView('panel-options', 'tab-audio'));
+  document.getElementById('btn-open-maps')?.addEventListener('click', () => switchMenuView('panel-maps'));
+  document.getElementById('btn-open-cars')?.addEventListener('click', () => switchMenuView('panel-cars'));
+
+  document.querySelectorAll('.back-menu-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.listeningAction = null;
+      switchMenuView(btn.dataset.back || 'menu-home');
+    });
+  });
+
+  document.querySelectorAll('.opt-tab-btn').forEach((tabBtn) => {
+    tabBtn.addEventListener('click', () => {
+      state.listeningAction = null;
+      switchMenuView('panel-options', tabBtn.dataset.tab);
+    });
+  });
+
+  // Pause & Opções direto do HUD (PC e Mobile)
+  document.getElementById('btn-options-hud')?.addEventListener('click', () => openGameMenu('panel-options', 'tab-audio'));
+  document.getElementById('mbtn-options')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openGameMenu('panel-options', 'tab-audio');
+  });
+
+  document.getElementById('btn-pause-reset')?.addEventListener('click', () => {
+    resetCarToSpawn(state.spawnIdx);
+    closeGameMenu();
+  });
+
+  // Seletor de Ponto de Partida em San Francisco
+  document.querySelectorAll('.spawn-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const idx = Number(chip.dataset.spawn) || 0;
+      resetCarToSpawn(idx);
+    });
+  });
+
+  // Ações rápidas dentro do Menu
+  document.getElementById('menu-tod-btn')?.addEventListener('click', cycleTimeOfDay);
+  document.getElementById('menu-trans-btn')?.addEventListener('click', toggleTransmissionMode);
+  document.getElementById('menu-lights-btn')?.addEventListener('click', toggleHeadlights);
+  document.getElementById('menu-camera-btn')?.addEventListener('click', cycleCameraMode);
+
+  // Sliders de Volume
+  const sliderMap = [
+    ['vol-master', 'master'],
+    ['vol-engine', 'engine'],
+    ['vol-turbo', 'turbo'],
+    ['vol-tires', 'tires']
+  ];
+  sliderMap.forEach(([id, key]) => {
+    document.getElementById(id)?.addEventListener('input', (e) => {
+      state.audio[key] = Number(e.target.value) / 100;
+      applyAudioSettings();
+    });
+  });
+
+  document.getElementById('btn-reset-audio')?.addEventListener('click', () => {
+    state.audio = { ...AUDIO_DEFAULTS };
+    applyAudioSettings();
+  });
+
+  document.getElementById('btn-reset-keys')?.addEventListener('click', () => {
+    state.keybinds = { ...DEFAULT_KEYBINDS };
+    state.listeningAction = null;
+    try {
+      localStorage.setItem('corsa3d_keybinds', JSON.stringify(state.keybinds));
+    } catch (err) {}
+    renderKeybindsUI();
+  });
+
+  document.querySelectorAll('.gfx-preset-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const q = card.dataset.quality;
+      if (q) applyGraphicsQuality(q);
+    });
+  });
+
+  applyAudioSettings();
+  renderKeybindsUI();
+  applyGraphicsQuality(state.graphicsQuality);
+  if (envTimeSystem) envTimeSystem.updateHudDom();
+}
+
+startBtn.addEventListener('click', () => {
+  if (!state.loaded) return;
+
+  if (!state.started) {
+    state.started = true;
+    closeGameMenu();
+    setTurboInstalled(state.turboInstalled);
+    carAudio.startContinuousLoops();
+    toggleEngineIgnition();
+  } else {
+    closeGameMenu();
+  }
 });
 
-document.getElementById('btn-transmission').addEventListener('click', toggleTransmissionMode);
 document.getElementById('btn-tod')?.addEventListener('click', cycleTimeOfDay);
-document.getElementById('btn-lights').addEventListener('click', toggleHeadlights);
-document.getElementById('btn-ignition').addEventListener('click', toggleEngineIgnition);
-document.getElementById('btn-camera').addEventListener('click', cycleCameraMode);
-document.getElementById('btn-spawn').addEventListener('click', () => resetCarToSpawn(state.spawnIdx + 1));
-document.getElementById('btn-reset').addEventListener('click', () => resetCarToSpawn(state.spawnIdx));
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -3808,7 +4206,7 @@ function animate(now) {
 
   if (state.loaded) {
     world.step(1 / 60, dt, 3);
-    if (chassisBody && chassisBody.position.y < -4.5) {
+    if (chassisBody && chassisBody.position.y < 12.0) {
       resetCarToSpawn(state.spawnIdx);
     }
     updateVehiclePhysicsAndEffects(dt);
@@ -3819,7 +4217,7 @@ function animate(now) {
     updateCamera(dt);
     smokeSystem.update(dt, camera);
     carAudio.update(dt);
-    if (state.started) {
+    if (state.started && !state.menuOpen) {
       updateHUD();
       if (minimapRenderer && chassisBody) {
         minimapRenderer.render(chassisBody.position, chassisBody.quaternion, state.speedKmh);
@@ -3830,34 +4228,8 @@ function animate(now) {
   renderer.render(scene, camera);
 }
 
-function setupGraphicsControls() {
-  document.getElementById('btn-graphics')?.addEventListener('click', () => toggleGraphicsModal());
-  document.getElementById('start-graphics-btn')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleGraphicsModal(true);
-  });
-  document.getElementById('mbtn-graphics')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    toggleGraphicsModal();
-  });
-  document.getElementById('close-graphics-btn')?.addEventListener('click', () => toggleGraphicsModal(false));
-  document.getElementById('confirm-graphics-btn')?.addEventListener('click', () => toggleGraphicsModal(false));
-  document.getElementById('graphics-modal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'graphics-modal') toggleGraphicsModal(false);
-  });
-
-  document.querySelectorAll('.gfx-preset-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      const q = card.dataset.quality;
-      if (q) applyGraphicsQuality(q);
-    });
-  });
-
-  applyGraphicsQuality(state.graphicsQuality);
-}
-
 initSimulation();
 setupMobileControls();
 setupTurboControls();
-setupGraphicsControls();
+setupGameMenuAndOptions();
 requestAnimationFrame(animate);
