@@ -39,8 +39,8 @@ const SPAWN_POINTS = [
 ];
 
 const CORSA_SPECS = {
-  mass: 480,                              // Massa equilibrada para escala 0.62
-  wheelRadius: 0.2854 * CAR_SCALE,        // metros (~0.177m)
+  mass: 920,                              // Massa real em ordem de marcha (Opel Corsa B 1.6 16V)
+  wheelRadius: 0.2854 * CAR_SCALE,        // metros (~0.2997m)
   IdleRPM: 850,
   MaxRPM: 6800,
   RedlineRPM: 6500,
@@ -65,25 +65,30 @@ const CORSA_SPECS = {
     '4': 185,
     '5': 235
   },
-  // Força de tração calibrada para ritmo real (aceleração progressiva e suave, sem disparar feito míssil)
+  // Força de tração calibrada para 920kg reais (subidas de San Francisco e aceleração progressiva realista)
   gearDriveForces: {
-    '-1': -760,
+    '-1': -1460,
     '0': 0,
-    '1': 840,
-    '2': 710,
-    '3': 590,
-    '4': 510,
-    '5': 440
+    '1': 1720,
+    '2': 1400,
+    '3': 1140,
+    '4': 960,
+    '5': 830
   },
   maxSteerAngle: 0.50,                    // ~28.5 graus em baixa velocidade
-  // Suspensão MacPherson ultra-estável
-  suspensionStiffness: 32.0,
+  // Suspensão MacPherson dianteira (motor transversal) + eixo de torção traseiro
+  frontSuspensionStiffness: 36.0,
+  rearSuspensionStiffness: 29.0,
   suspensionRestLength: 0.34 * CAR_SCALE,
   maxSuspensionTravel: 0.22 * CAR_SCALE,
-  dampingCompression: 4.8,
-  dampingRelaxation: 5.6,
-  rollInfluence: 0.12,                    // Permite inclinação visual natural da carroceria nas curvas
-  frictionSlipNormal: 1.65,               // Coeficiente de atrito real de pneu de borracha no asfalto seco
+  frontDampingCompression: 4.8,
+  frontDampingRelaxation: 6.0,
+  rearDampingCompression: 4.2,
+  rearDampingRelaxation: 5.2,
+  frontAntiRollStiffness: 17500,          // Barra estabilizadora dianteira (N/m) — segura rolagem nas curvas
+  rearAntiRollStiffness: 12500,           // Barra estabilizadora traseira (N/m) — equilíbrio e controle de traseira
+  rollInfluence: 0.16,                    // Inclinação natural da carroceria e transferência de peso nas curvas
+  frictionSlipNormal: 1.68,               // Coeficiente de atrito estático de pneu radial no asfalto seco
   frictionSlipHandbrake: 1.15             // Atrito dinâmico das rodas traseiras quando travadas pelo freio de mão
 };
 
@@ -285,6 +290,8 @@ const state = {
   rpm: 0,
   speedKmh: 0,
   forwardSpeedMs: 0,
+  lateralSpeedMs: 0,
+  longitudinalLoad: 0,
   throttleInput: 0,
   brakeInput: 0,
   handbrakeInput: 0,
@@ -2608,6 +2615,7 @@ function toggleGraphicsModal(forceOpen) {
 const world = new CANNON.World();
 world.gravity.set(0, -9.81, 0);
 world.broadphase = new CANNON.SAPBroadphase(world);
+world.solver.iterations = 12;
 world.defaultContactMaterial.friction = 0.3;
 
 const groundMat = new CANNON.Material('ground');
@@ -2765,12 +2773,72 @@ async function initSimulation() {
   }
 }
 
+const tempCannonForce = new CANNON.Vec3();
+const tempCannonPoint = new CANNON.Vec3();
+const tempCannonZero = new CANNON.Vec3();
+let chassisPreStepRegistered = false;
+
+function applyAntiRollPair(wheelL, wheelR, stiffness) {
+  if (!wheelL || !wheelR || !wheelL.isInContact || !wheelR.isInContact) return;
+  const compL = wheelL.suspensionRestLength - wheelL.suspensionLength;
+  const compR = wheelR.suspensionRestLength - wheelR.suspensionLength;
+  const relVelDiff = (wheelL.suspensionRelativeVelocity || 0) - (wheelR.suspensionRelativeVelocity || 0);
+  const rawForce = (compL - compR) * stiffness - relVelDiff * (stiffness * 0.025);
+  const clampedForce = THREE.MathUtils.clamp(rawForce, -4200, 4200);
+  if (Math.abs(clampedForce) < 2.0) return;
+
+  // Empurra lado mais comprimido para cima e traciona lado estendido para baixo (torque de rolagem puro)
+  tempCannonForce.set(0, clampedForce, 0);
+  tempCannonPoint.set(wheelL.chassisConnectionPointLocal.x, 0, wheelL.chassisConnectionPointLocal.z);
+  chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+
+  tempCannonForce.set(0, -clampedForce, 0);
+  tempCannonPoint.set(wheelR.chassisConnectionPointLocal.x, 0, wheelR.chassisConnectionPointLocal.z);
+  chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+}
+
+function applyChassisSimulationForces() {
+  if (!vehicle || !chassisBody || !state.loaded) return;
+
+  // 1. Barras estabilizadoras dianteira (0-1) e traseira (2-3) atuando em cada substep de física
+  applyAntiRollPair(vehicle.wheelInfos[0], vehicle.wheelInfos[1], CORSA_SPECS.frontAntiRollStiffness);
+  applyAntiRollPair(vehicle.wheelInfos[2], vehicle.wheelInfos[3], CORSA_SPECS.rearAntiRollStiffness);
+
+  // 2. Arrasto aerodinâmico real (F ~ v²), resistência ao rolamento dos pneus e downforce sutil no chassi
+  const vx = chassisBody.velocity.x;
+  const vy = chassisBody.velocity.y;
+  const vz = chassisBody.velocity.z;
+  const speedSq = vx * vx + vy * vy + vz * vz;
+  if (speedSq > 0.04) {
+    const speed = Math.sqrt(speedSq);
+    const invSpeed = 1.0 / speed;
+
+    let wheelsOnGround = 0;
+    for (let i = 0; i < 4; i++) {
+      if (vehicle.wheelInfos[i] && vehicle.wheelInfos[i].isInContact) wheelsOnGround++;
+    }
+    const groundFactor = wheelsOnGround * 0.25;
+    const dragMag = 0.92 * speedSq;
+    const rollResMag = 132.0 * groundFactor * Math.min(1.0, speed / 0.6);
+
+    const totalResist = dragMag + rollResMag;
+    tempCannonForce.set(-vx * invSpeed * totalResist, -vy * invSpeed * (dragMag * 0.35), -vz * invSpeed * totalResist);
+    chassisBody.applyForce(tempCannonForce, tempCannonZero);
+
+    if (groundFactor > 0 && speed > 8.0) {
+      tempCannonForce.set(0, -0.34 * (vx * vx + vz * vz), 0);
+      tempCannonPoint.set(0, 0, -0.1 * CAR_SCALE);
+      chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+    }
+  }
+}
+
 function setupCorsaPhysics(comOffsetY) {
   chassisBody = new CANNON.Body({
     mass: CORSA_SPECS.mass,
     material: chassisMat,
-    linearDamping: 0.03,
-    angularDamping: 0.40 // Amortecimento de guinada que confere peso de borracha no asfalto
+    linearDamping: 0.012,
+    angularDamping: 0.15 // Permite transferência de peso natural (mergulho, rolagem e inclinação)
   });
 
   // Caixa de colisão elevada (fundo bem acima do asfalto para nunca bater no chão)
@@ -2798,12 +2866,12 @@ function setupCorsaPhysics(comOffsetY) {
     vehicle.addWheel({
       radius: CORSA_SPECS.wheelRadius,
       directionLocal: new CANNON.Vec3(0, -1, 0),
-      suspensionStiffness: CORSA_SPECS.suspensionStiffness,
+      suspensionStiffness: wInfo.isFront ? CORSA_SPECS.frontSuspensionStiffness : CORSA_SPECS.rearSuspensionStiffness,
       suspensionRestLength: CORSA_SPECS.suspensionRestLength,
       maxSuspensionTravel: CORSA_SPECS.maxSuspensionTravel,
-      maxSuspensionForce: 25000,
-      dampingCompression: CORSA_SPECS.dampingCompression,
-      dampingRelaxation: CORSA_SPECS.dampingRelaxation,
+      maxSuspensionForce: 55000,
+      dampingCompression: wInfo.isFront ? CORSA_SPECS.frontDampingCompression : CORSA_SPECS.rearDampingCompression,
+      dampingRelaxation: wInfo.isFront ? CORSA_SPECS.frontDampingRelaxation : CORSA_SPECS.rearDampingRelaxation,
       frictionSlip: CORSA_SPECS.frictionSlipNormal,
       rollInfluence: CORSA_SPECS.rollInfluence,
       axleLocal: new CANNON.Vec3(-1, 0, 0),
@@ -2814,6 +2882,10 @@ function setupCorsaPhysics(comOffsetY) {
   });
 
   vehicle.addToWorld(world);
+  if (!chassisPreStepRegistered) {
+    world.addEventListener('preStep', applyChassisSimulationForces);
+    chassisPreStepRegistered = true;
+  }
   resetCarToSpawn(0);
 }
 
@@ -2832,6 +2904,10 @@ function resetCarToSpawn(spawnIndex = state.spawnIdx) {
   state.currentSteer = 0;
   state.turboBoost = 0;
   state.skidIntensity = 0;
+  state.isDrifting = false;
+  state.driftAngleDeg = 0;
+  state.lateralSpeedMs = 0;
+  state.longitudinalLoad = 0;
   state.throttleInput = 0;
   state.brakeInput = 0;
   state.shiftCooldown = 0;
@@ -2893,9 +2969,30 @@ function updateVehiclePhysicsAndEffects(dt) {
 
   tempVelVec.set(chassisBody.velocity.x, chassisBody.velocity.y, chassisBody.velocity.z);
   state.forwardSpeedMs = tempVelVec.dot(tempChassisForward);
+  state.lateralSpeedMs = tempVelVec.dot(tempChassisRight);
 
   // Velocidade aparente calibrada para o ritmo real do Corsa
   state.speedKmh = (Math.abs(state.forwardSpeedMs) / WORLD_SPEED_SCALE) * 3.6;
+
+  // Ângulo de derrapagem lateral (slip angle) e estado de drift para pneu dinâmico e áudio/fumaça
+  const horizSpeedMs = Math.hypot(tempVelVec.x, tempVelVec.z);
+  if (horizSpeedMs > 2.2) {
+    const rawSlipRad = Math.atan2(state.lateralSpeedMs, Math.max(1.0, Math.abs(state.forwardSpeedMs)));
+    const targetAngleDeg = THREE.MathUtils.radToDeg(rawSlipRad);
+    state.driftAngleDeg = THREE.MathUtils.lerp(state.driftAngleDeg, targetAngleDeg, Math.min(1, dt * 14));
+  } else {
+    state.driftAngleDeg = THREE.MathUtils.lerp(state.driftAngleDeg, 0, Math.min(1, dt * 10));
+  }
+  const absSlipDeg = Math.abs(state.driftAngleDeg);
+  state.isDrifting = horizSpeedMs > 3.5 && absSlipDeg > 10.5;
+
+  // Transferência de peso longitudinal (+ freando/dianteira carrega, - acelerando/traseira carrega)
+  const targetLongLoad = THREE.MathUtils.clamp(
+    state.brakeInput - (state.engineOn && state.gear > 0 ? state.throttleInput * (0.55 + state.turboBoost * 0.35) : 0),
+    -1.0,
+    1.0
+  );
+  state.longitudinalLoad = THREE.MathUtils.lerp(state.longitudinalLoad, targetLongLoad, Math.min(1, dt * 7.5));
 
   let rawThrottle = 0.0;
   let rawBrake = 0.0;
@@ -2941,14 +3038,26 @@ function updateVehiclePhysicsAndEffects(dt) {
   state.brakeInput = THREE.MathUtils.lerp(state.brakeInput, rawBrake, Math.min(1, dt * 16));
   state.handbrakeInput = inputHandbrake ? 1.0 : 0.0;
 
-  // Direção assistida progressiva (Teclado A/D ou Joystick Analógico Virtual)
+  // Direção assistida progressiva com auto-alinhamento por caster e contra-esterço natural em drift
   let targetSteer = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
   if (Math.abs(state.touchInput.steer) > 0.01) {
     targetSteer = state.touchInput.steer;
   }
-  const speedFactor = THREE.MathUtils.clamp(1.0 - (state.speedKmh / 180) * 0.55, 0.35, 1.0);
+  const speedFactor = THREE.MathUtils.clamp(1.0 - (state.speedKmh / 185) * 0.62, 0.28, 1.0);
   const maxSteerNow = CORSA_SPECS.maxSteerAngle * speedFactor;
-  state.currentSteer = THREE.MathUtils.lerp(state.currentSteer, targetSteer * maxSteerNow, Math.min(1, dt * 8.0));
+
+  let desiredSteer = targetSteer * maxSteerNow;
+  if (Math.abs(targetSteer) < 0.05 && state.forwardSpeedMs > 3.5 && absSlipDeg > 8.0) {
+    // Geometria de caster alinha as rodas dianteiras naturalmente na direção da trajetória durante derrapagem
+    const casterSign = Math.sign(state.lateralSpeedMs);
+    const casterAssist = THREE.MathUtils.clamp((absSlipDeg - 8.0) / 30.0, 0, 0.42) * maxSteerNow;
+    desiredSteer = -casterSign * casterAssist;
+  }
+
+  const isReturningToCenter = Math.abs(targetSteer) < 0.05 || (targetSteer * state.currentSteer < 0);
+  const speedCasterRate = 8.0 + THREE.MathUtils.clamp(state.speedKmh / 90, 0, 1.0) * 4.5;
+  const steerRate = isReturningToCenter ? speedCasterRate : 7.0;
+  state.currentSteer = THREE.MathUtils.lerp(state.currentSteer, desiredSteer, Math.min(1, dt * steerRate));
 
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer > 0 ? 1.04 : 0.96), 0); // FL
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer < 0 ? 1.04 : 0.96), 1); // FR
@@ -3047,27 +3156,44 @@ function updateVehiclePhysicsAndEffects(dt) {
   // ==========================================================================
   const isHandbraking = state.handbrakeInput > 0.5;
 
+  // Modelo dinâmico de aderência dos pneus (círculo de atrito + transferência de carga longitudinal)
+  const baseGrip = CORSA_SPECS.frictionSlipNormal;
+  const slipDropFactor = THREE.MathUtils.clamp((absSlipDeg - 13.0) / 32.0, 0, 1.0);
+  const lateralGripPenalty = slipDropFactor * 0.28;
+
+  const brakeFrontBonus = Math.max(0, state.longitudinalLoad) * 0.06;
+  const brakeRearUnloading = Math.max(0, state.longitudinalLoad) * 0.16;
+  const accelFrontUnloading = Math.max(0, -state.longitudinalLoad) * 0.10;
+
+  const dynamicFrontGrip = THREE.MathUtils.clamp(
+    baseGrip + brakeFrontBonus - accelFrontUnloading - lateralGripPenalty * 0.90,
+    1.22,
+    1.76
+  );
+  const dynamicRearGrip = THREE.MathUtils.clamp(
+    baseGrip - brakeRearUnloading - lateralGripPenalty * 1.05,
+    1.18,
+    1.72
+  );
+
   if (isHandbraking) {
-    // Na vida real, o freio de mão mecânico atua exclusivamente travando as rodas traseiras.
-    // O pneu traseiro travado passa de atrito estático (1.65) para atrito cinético de deslizamento (1.15).
-    // As rodas dianteiras continuam rolando e esterçando com aderência total (1.65).
-    vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    // Freio de mão mecânico atua exclusivamente travando as rodas traseiras (preserva resposta exata!)
+    vehicle.wheelInfos[0].frictionSlip = baseGrip;
+    vehicle.wheelInfos[1].frictionSlip = baseGrip;
     vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
     vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
   } else if (isFrontWheelSpinningTurbo) {
     // SÓ QUANDO O TURBO ENCHER: o carro destraciona a frente violentamente!
-    // Pneus dianteiros perdem tração de atrito estático (1.65) e passam a queimar no asfalto (0.72)
     vehicle.wheelInfos[0].frictionSlip = 0.72;
     vehicle.wheelInfos[1].frictionSlip = 0.72;
-    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    vehicle.wheelInfos[2].frictionSlip = dynamicRearGrip;
+    vehicle.wheelInfos[3].frictionSlip = dynamicRearGrip;
   } else {
-    // Condução normal: as 4 rodas têm 100% de aderência integral no asfalto (1.65)
-    vehicle.wheelInfos[0].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[1].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipNormal;
-    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipNormal;
+    // Condução normal/esportiva: atrito responde dinamicamente ao peso na frenagem, aceleração e derrapagem
+    vehicle.wheelInfos[0].frictionSlip = dynamicFrontGrip;
+    vehicle.wheelInfos[1].frictionSlip = dynamicFrontGrip;
+    vehicle.wheelInfos[2].frictionSlip = dynamicRearGrip;
+    vehicle.wheelInfos[3].frictionSlip = dynamicRearGrip;
   }
 
   // Curva de Torque Realista + Limitador Físico de Velocidade por Marcha
@@ -3087,7 +3213,7 @@ function updateVehiclePhysicsAndEffects(dt) {
 
     // Curva de potência do Turbo:
     // Sem turbo: 1.0x
-    // Turbo enchendo: ganho gradual de 1.0x a 1.25x
+    // Turbo enchendo: ganho gradual de 1.0x a 1.30x
     // Turbo CHEIO (>= 0.82): EXPLOSÃO DE POTÊNCIA (1.95x de torque!)
     let turboBoostFactor = 1.0;
     if (state.turboInstalled) {
@@ -3101,27 +3227,27 @@ function updateVehiclePhysicsAndEffects(dt) {
     wheelDriveForce = state.throttleInput * baseGearForce * torqueCurve * speedLimiterFactor * turboBoostFactor;
 
     if (state.speedKmh > maxGearSpeedKmh + 1.5) {
-      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * 900;
+      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * 1650;
     } else if (state.throttleInput < 0.05 && state.speedKmh > 4) {
-      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * (110 + rpmNorm * 180);
+      // Freio-motor realista escalonado por relação de marcha (1ª segura mais que 5ª)
+      const gearEngineBrakeRatio = 0.60 + (6 - Math.min(5, Math.abs(state.gear))) * 0.14;
+      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * (205 + rpmNorm * 325) * gearEngineBrakeRatio;
     }
   }
 
-  const aeroDragForce = -Math.sign(state.forwardSpeedMs) * 0.55 * state.forwardSpeedMs * state.forwardSpeedMs;
-  const totalFrontWheelForce = wheelDriveForce + aeroDragForce * 0.5;
-
   // TRAÇÃO DIANTEIRA (FWD): Força aplicada exclusivamente nas rodas 0 (FL) e 1 (FR)
-  vehicle.applyEngineForce(totalFrontWheelForce, 0);
-  vehicle.applyEngineForce(totalFrontWheelForce, 1);
+  // (Arrasto aerodinâmico e resistência de rolamento atuam diretamente no chassi via preStep)
+  vehicle.applyEngineForce(wheelDriveForce, 0);
+  vehicle.applyEngineForce(wheelDriveForce, 1);
   vehicle.applyEngineForce(0, 2);
   vehicle.applyEngineForce(0, 3);
 
-  // Freio de serviço progressivo realista (frenagem gradual e controlável sem travar seco)
+  // Freio de serviço progressivo realista calibrado para 920kg (proporcional ao pedal, dianteira 63% / traseira 37%)
   const speedBrakeFactor = THREE.MathUtils.clamp(0.60 + (state.speedKmh / 140) * 0.40, 0.60, 1.0);
-  const serviceBrakeFront = state.brakeInput * 14.5 * speedBrakeFactor;
-  const serviceBrakeRear = state.brakeInput * 8.5 * speedBrakeFactor;
-  // Freio de mão mecânico real (aplica torque de travamento nas rodas traseiras 2 e 3)
-  const handbrakeRear = isHandbraking ? 36 : 0;
+  const serviceBrakeFront = state.brakeInput * 27.8 * speedBrakeFactor;
+  const serviceBrakeRear = state.brakeInput * 16.3 * speedBrakeFactor;
+  // Freio de mão mecânico real (escala proporcional 920/480 para preservar exatamente o mesmo drift!)
+  const handbrakeRear = isHandbraking ? 69 : 0;
 
   vehicle.setBrake(serviceBrakeFront, 0);
   vehicle.setBrake(serviceBrakeFront, 1);
@@ -3168,6 +3294,10 @@ function updateVehiclePhysicsAndEffects(dt) {
     let wOmega = state.forwardSpeedMs / CORSA_SPECS.wheelRadius;
     if (i >= 2 && isHandbraking) {
       wOmega = 0; // Rodas traseiras travadas no freio de mão
+    } else if (state.brakeInput > 0.70 && state.speedKmh > 25) {
+      // Desaceleração realista das rodas sob frenagem forte (modulação ABS visual)
+      const brakeSlipScale = 1.0 - THREE.MathUtils.clamp((state.brakeInput - 0.65) * 1.15, 0, 0.45);
+      wOmega *= brakeSlipScale;
     }
     if (i < 2 && state.engineOn && state.gear === 1 && state.throttleInput > 0.85 && state.speedKmh < 10) {
       wOmega += state.throttleInput * 7.0;
@@ -3180,7 +3310,10 @@ function updateVehiclePhysicsAndEffects(dt) {
   }
 
   const isHardBrakingHighSpeed = state.brakeInput > 0.75 && state.speedKmh > 35;
-  const isHandbrakeDrifting = isHandbraking && state.speedKmh > 8;
+  const isCorneringHard = horizSpeedMs > 5.0 && absSlipDeg > 11.5 && !isHandbraking;
+  const lateralCornerSkid = isCorneringHard
+    ? THREE.MathUtils.clamp((absSlipDeg - 11.5) / 22.0, 0.15, 0.88)
+    : 0;
   const isFastLaunchBurnout =
     state.engineOn &&
     state.throttleInput > 0.90 &&
@@ -3199,18 +3332,24 @@ function updateVehiclePhysicsAndEffects(dt) {
     state.wheelCompression[i] = suspTravel;
 
     let wSkid = 0;
-    if (i < 2 && isFastLaunchBurnout) {
-      wSkid = Math.max(wSkid, 0.78);
-    }
-    // SÓ QUANDO O TURBO ENCHER: as rodas dianteiras destracionam com fumaça intensa e borracha queimando
-    if (i < 2 && isFrontWheelSpinningTurbo) {
-      wSkid = Math.max(wSkid, 0.96);
-    }
-    if (isHardBrakingHighSpeed) {
-      wSkid = Math.max(wSkid, THREE.MathUtils.clamp((state.speedKmh - 28) / 60, 0.50, 1.0));
-    }
-    if (i >= 2 && isHandbraking && state.speedKmh > 8) {
-      wSkid = Math.max(wSkid, 0.85);
+    if (wi.isInContact) {
+      if (i < 2 && isFastLaunchBurnout) {
+        wSkid = Math.max(wSkid, 0.78);
+      }
+      // SÓ QUANDO O TURBO ENCHER: as rodas dianteiras destracionam com fumaça intensa e borracha queimando
+      if (i < 2 && isFrontWheelSpinningTurbo) {
+        wSkid = Math.max(wSkid, 0.96);
+      }
+      if (isHardBrakingHighSpeed) {
+        wSkid = Math.max(wSkid, THREE.MathUtils.clamp((state.speedKmh - 28) / 60, 0.50, 1.0));
+      }
+      if (i >= 2 && isHandbraking && state.speedKmh > 8) {
+        wSkid = Math.max(wSkid, 0.85);
+      }
+      if (lateralCornerSkid > 0) {
+        // Pneus carregados cantam progressivamente ao entrar forte nas curvas
+        wSkid = Math.max(wSkid, Math.min(0.88, lateralCornerSkid * (0.85 + suspTravel * 0.25)));
+      }
     }
 
     state.wheelSkids[i] = wSkid;
@@ -4366,7 +4505,7 @@ function animate(now) {
   lastTime = now;
 
   if (state.loaded) {
-    world.step(1 / 60, dt, 2);
+    world.step(1 / 60, dt, 3);
     if (chassisBody && chassisBody.position.y < 12.0) {
       resetCarToSpawn(state.spawnIdx);
     }
