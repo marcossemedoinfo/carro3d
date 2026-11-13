@@ -46,8 +46,7 @@ const CORSA_SPECS = {
   RedlineRPM: 6500,
   ShiftUpRPM: 6150,
   ShiftDownRPM: 2700,
-  // Limites reais de velocidade máxima no velocímetro por marcha (no corte de giro a 6500 RPM):
-  // 1ª: 20 km/h | 2ª: 50 km/h | 3ª: 90 km/h | 4ª: 120 km/h | 5ª: 180 km/h | Ré: 28 km/h
+  // Limites de velocidade máxima no velocímetro por marcha (Original Aspirado vs Câmbio Longo no Modo Turbo):
   gearMaxSpeedKmh: {
     '-1': 28,
     '0': 0,
@@ -56,6 +55,15 @@ const CORSA_SPECS = {
     '3': 90,
     '4': 120,
     '5': 180
+  },
+  gearMaxSpeedKmhTurbo: {
+    '-1': 38,
+    '0': 0,
+    '1': 55,
+    '2': 98,
+    '3': 142,
+    '4': 185,
+    '5': 235
   },
   // Força de tração calibrada para ritmo real (aceleração progressiva e suave, sem disparar feito míssil)
   gearDriveForces: {
@@ -2852,6 +2860,12 @@ const tempVelVec = new THREE.Vector3();
 const tempSmokeVel = new THREE.Vector3();
 const tempExhaustVel = new THREE.Vector3();
 
+function getGearMaxSpeedKmh(gear) {
+  const table = state.turboInstalled ? CORSA_SPECS.gearMaxSpeedKmhTurbo : CORSA_SPECS.gearMaxSpeedKmh;
+  const val = table[String(gear)];
+  return typeof val === 'number' ? val : 20;
+}
+
 function updateVehiclePhysicsAndEffects(dt) {
   if (!vehicle || !chassisBody) return;
 
@@ -2941,8 +2955,8 @@ function updateVehiclePhysicsAndEffects(dt) {
 
   if (state.shiftCooldown > 0) state.shiftCooldown = Math.max(0, state.shiftCooldown - dt);
 
-  // Escalonamento de velocidades máximas por marcha (20, 50, 90, 120, 180 km/h)
-  const maxGearSpeedKmh = CORSA_SPECS.gearMaxSpeedKmh[String(state.gear)] || 20;
+  // Escalonamento dinâmico de velocidades máximas por marcha (alonga automaticamente com Turbo ligado)
+  const maxGearSpeedKmh = getGearMaxSpeedKmh(state.gear);
   const speedRatioInGear = maxGearSpeedKmh > 0 ? state.speedKmh / maxGearSpeedKmh : 0;
 
   const wheelDrivenRPM = CORSA_SPECS.IdleRPM + speedRatioInGear * (CORSA_SPECS.RedlineRPM - CORSA_SPECS.IdleRPM);
@@ -2966,7 +2980,7 @@ function updateVehiclePhysicsAndEffects(dt) {
       if (state.speedKmh >= maxGearSpeedKmh * 0.92 && state.gear < 5) {
         changeGear(state.gear + 1);
       } else if (state.gear > 1) {
-        const prevGearMax = CORSA_SPECS.gearMaxSpeedKmh[String(state.gear - 1)] || 20;
+        const prevGearMax = getGearMaxSpeedKmh(state.gear - 1);
         if (state.speedKmh < prevGearMax * 0.72) {
           changeGear(state.gear - 1);
         }
@@ -3535,7 +3549,7 @@ function updateHUD() {
   const banner = hudDom.banner;
   if (banner) {
     if (state.cuttingRev) {
-      const maxG = CORSA_SPECS.gearMaxSpeedKmh[String(state.gear)];
+      const maxG = getGearMaxSpeedKmh(state.gear);
       banner.textContent =
         state.gear > 0 && state.gear < 5
           ? `LIMITE DA ${state.gear}ª MARCHA (${maxG} KM/H) — TROQUE DE MARCHA (+)`
