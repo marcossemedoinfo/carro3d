@@ -95,18 +95,18 @@ const GRAPHICS_PRESETS = {
   low: {
     key: 'low',
     label: 'BAIXO',
-    pixelRatio: 0.75,
+    pixelRatio: 0.70,
     shadows: false,
     shadowType: THREE.BasicShadowMap,
     shadowSize: 512,
     shadowDist: 14,
     reflections: 'off',
-    envResolution: [256, 128],
+    envResolution: [128, 64],
     clearcoat: false,
     realtimeCube: false,
-    maxSmokeParticles: 60,
-    cameraFar: 420,
-    fogMult: 1.35
+    maxSmokeParticles: 35,
+    cameraFar: 320,
+    fogMult: 1.85
   },
   medium: {
     key: 'medium',
@@ -1153,15 +1153,10 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
         child.receiveShadow = false;
       }
 
-      // Garante que casas espelhadas (determinante negativo) renderizem faces externas corretamente
-      const isMirrored = child.matrixWorld.determinant() < 0;
+      // Normaliza materiais da cidade sem forçar DoubleSide (a malha combinada corrige a rotação de faces espelhadas)
       const mats = Array.isArray(child.material) ? child.material : [child.material];
       mats.forEach((m) => {
         if (!m) return;
-        if (isMirrored && m.side !== THREE.DoubleSide) {
-          m.side = THREE.DoubleSide;
-          m.needsUpdate = true;
-        }
         if (!cityTrackedMaterials.has(m)) {
           cityTrackedMaterials.add(m);
           m.envMapIntensity = 0.22;
@@ -1172,7 +1167,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     }
   });
 
-  const ROAD_SECTOR_SIZE = 45.0;
+  const ROAD_SECTOR_SIZE = 75.0;
   const roadSectorMap = new Map();
   const minimapRoadSectorMap = new Map();
 
@@ -1192,7 +1187,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   const PLAY_MIN_Z = -720.0;
   const PLAY_MAX_Z = 720.0;
   const PLAY_MIN_Y = 14.0;
-  const PLAY_MAX_Y = 115.0;
+  const PLAY_MAX_Y = 105.0;
 
   function appendTriToSector(sectorMap, sx, sz, ax, ay, az, bx, by, bz, cx, cy, cz) {
     const sKey = `${sx}_${sz}`;
@@ -1210,20 +1205,20 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     const dx = bx - ax;
     const dz = bz - az;
     const totalLen = Math.hypot(dx, dz);
-    if (totalLen < 0.25) return;
+    if (totalLen < 0.65) return;
 
     const angleY = Math.atan2(dx, dz);
-    const angBucket = Math.round(((angleY % Math.PI) + Math.PI) % Math.PI / (Math.PI / 12));
-    const subCount = Math.max(1, Math.ceil(totalLen / 14.0));
+    const angBucket = Math.round(((angleY % Math.PI) + Math.PI) % Math.PI / (Math.PI / 10));
+    const subCount = Math.max(1, Math.ceil(totalLen / 16.0));
     const segLen = (totalLen / subCount) + 0.35;
 
     for (let s = 0; s < subCount; s++) {
       const t = (s + 0.5) / subCount;
       const cx = ax + dx * t;
       const cz = az + dz * t;
-      const gx = Math.round(cx * 0.55);
-      const gy = Math.round(midY * 0.25);
-      const gz = Math.round(cz * 0.55);
+      const gx = Math.round(cx * 0.35);
+      const gy = Math.round(midY * 0.16);
+      const gz = Math.round(cz * 0.35);
       const wallKey = `${gx}_${gy}_${gz}_${angBucket}`;
 
       if (!dedupWallSet.has(wallKey)) {
@@ -1232,7 +1227,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
           x: cx,
           y: midY,
           z: cz,
-          len: Math.max(0.9, segLen),
+          len: Math.max(1.0, segLen),
           height: wallHeight,
           angleY
         });
@@ -1277,6 +1272,10 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       !isNetworkBoundWall &&
       (isStreetOrBridge || path.includes('terrain_01') || path.includes('concrete_01'));
 
+    const isSmallFoliageProp =
+      !isGroundSurface &&
+      (path.includes('/tree') || path.includes('bush') || path.includes('pot_'));
+
     if (isGroundSurface && meshAABB.min.y < 105.0 && meshAABB.max.y > 25.0) {
       mesh.receiveShadow = true;
     }
@@ -1320,7 +1319,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
         }
       }
       // 2. Paredes, Prédios, Guardrails da Ponte, Túneis e Limites de San Francisco
-      else if (Math.abs(normal.y) < 0.48 && (maxY - minY) > 0.35 && minY <= 95.0 && maxY >= 36.0) {
+      else if (!isSmallFoliageProp && Math.abs(normal.y) < 0.48 && (maxY - minY) > 0.40 && minY <= 89.5 && maxY >= 36.0) {
         let maxDist2D = 0;
         let bestA = v0;
         let bestB = v1;
@@ -1332,9 +1331,8 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
         const d20 = Math.hypot(v0.x - v2.x, v0.z - v2.z);
         if (d20 > maxDist2D) { maxDist2D = d20; bestA = v2; bestB = v0; }
 
-        if (maxDist2D >= 0.30) {
+        if (maxDist2D >= 0.65) {
           const midY = (minY + maxY) * 0.5;
-          // Altura integral da fachada para impedir que caixas flutuem acima da rua em prédios altos
           const wallHeight = Math.max(1.2, maxY - minY);
           pushWallSegment(bestA.x, bestA.z, bestB.x, bestB.z, midY, wallHeight);
         }
@@ -1375,7 +1373,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   }
   await new Promise((r) => setTimeout(r, 0));
 
-  const SECTOR_SIZE = 35.0;
+  const SECTOR_SIZE = 85.0;
   const sectorGroups = new Map();
 
   for (let i = 0; i < wallSegments.length; i++) {
@@ -1393,7 +1391,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   }
 
   const qWall = new CANNON.Quaternion();
-  const MAX_SHAPES_PER_BODY = 35;
+  const MAX_SHAPES_PER_BODY = 140;
 
   sectorGroups.forEach((segs) => {
     for (let i = 0; i < segs.length; i += MAX_SHAPES_PER_BODY) {
@@ -1433,6 +1431,146 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   if (minimapRenderer) {
     minimapRenderer.buildRoadPaths(minimapRoadSectorMap.size > 0 ? minimapRoadSectorMap : roadSectorMap, wallSegments);
   }
+}
+
+// Agrupa malhas estáticas por material e setor espacial de 320m x 320m (reduz ~1.400 draw calls para ~150)
+function buildBatchedCityRenderGroup(cityScene) {
+  cityScene.updateMatrixWorld(true);
+  const BATCH_CHUNK = 320.0;
+  const buckets = new Map();
+  const worldBox = new THREE.Box3();
+  const center = new THREE.Vector3();
+
+  cityScene.traverse((child) => {
+    if (!child.isMesh || !child.visible || !child.geometry || !child.geometry.attributes.position) return;
+    if (Array.isArray(child.material) || !child.material) return;
+
+    const geom = child.geometry;
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    worldBox.copy(geom.boundingBox).applyMatrix4(child.matrixWorld);
+    worldBox.getCenter(center);
+
+    const cx = Math.floor(center.x / BATCH_CHUNK);
+    const cz = Math.floor(center.z / BATCH_CHUNK);
+    const recvShadow = child.receiveShadow ? 1 : 0;
+    const key = `${cx}_${cz}_${child.material.uuid}_${recvShadow}`;
+
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { material: child.material, receiveShadow: Boolean(recvShadow), items: [] };
+      buckets.set(key, bucket);
+    }
+    bucket.items.push(child);
+    child.visible = false;
+  });
+
+  const mergedGroup = new THREE.Group();
+  const normalMat = new THREE.Matrix3();
+  const vPos = new THREE.Vector3();
+  const vNorm = new THREE.Vector3();
+
+  buckets.forEach((bucket) => {
+    let totalVerts = 0;
+    let totalIndices = 0;
+    let hasUv = true;
+    let hasUv1 = true;
+
+    for (let k = 0; k < bucket.items.length; k++) {
+      const g = bucket.items[k].geometry;
+      const pCount = g.attributes.position.count;
+      totalVerts += pCount;
+      totalIndices += g.index ? g.index.count : pCount;
+      if (!g.attributes.uv) hasUv = false;
+      if (!g.attributes.uv1) hasUv1 = false;
+    }
+
+    if (totalVerts === 0 || totalIndices === 0) return;
+
+    const posArr = new Float32Array(totalVerts * 3);
+    const normArr = new Float32Array(totalVerts * 3);
+    const uvArr = hasUv ? new Float32Array(totalVerts * 2) : null;
+    const uv1Arr = hasUv1 ? new Float32Array(totalVerts * 2) : null;
+    const idxArr = totalVerts > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices);
+
+    let vCursor = 0;
+    let iCursor = 0;
+
+    for (let k = 0; k < bucket.items.length; k++) {
+      const mesh = bucket.items[k];
+      const geom = mesh.geometry;
+      const pos = geom.attributes.position;
+      const norm = geom.attributes.normal;
+      const uv = geom.attributes.uv;
+      const uv1 = geom.attributes.uv1;
+      const idx = geom.index;
+      const wm = mesh.matrixWorld;
+      const isMirrored = wm.determinant() < 0;
+      normalMat.getNormalMatrix(wm);
+
+      for (let v = 0; v < pos.count; v++) {
+        vPos.fromBufferAttribute(pos, v).applyMatrix4(wm);
+        const o3 = (vCursor + v) * 3;
+        posArr[o3] = vPos.x;
+        posArr[o3 + 1] = vPos.y;
+        posArr[o3 + 2] = vPos.z;
+
+        if (norm) {
+          vNorm.fromBufferAttribute(norm, v).applyMatrix3(normalMat).normalize();
+          normArr[o3] = vNorm.x;
+          normArr[o3 + 1] = vNorm.y;
+          normArr[o3 + 2] = vNorm.z;
+        } else {
+          normArr[o3 + 1] = 1;
+        }
+
+        if (uvArr && uv) {
+          const o2 = (vCursor + v) * 2;
+          uvArr[o2] = uv.getX(v);
+          uvArr[o2 + 1] = uv.getY(v);
+        }
+        if (uv1Arr && uv1) {
+          const o2 = (vCursor + v) * 2;
+          uv1Arr[o2] = uv1.getX(v);
+          uv1Arr[o2 + 1] = uv1.getY(v);
+        }
+      }
+
+      const triCount = (idx ? idx.count : pos.count) / 3;
+      for (let t = 0; t < triCount; t++) {
+        const a = vCursor + (idx ? idx.getX(t * 3) : t * 3);
+        const b = vCursor + (idx ? idx.getX(t * 3 + 1) : t * 3 + 1);
+        const c = vCursor + (idx ? idx.getX(t * 3 + 2) : t * 3 + 2);
+        if (isMirrored) {
+          idxArr[iCursor++] = a;
+          idxArr[iCursor++] = c;
+          idxArr[iCursor++] = b;
+        } else {
+          idxArr[iCursor++] = a;
+          idxArr[iCursor++] = b;
+          idxArr[iCursor++] = c;
+        }
+      }
+
+      vCursor += pos.count;
+    }
+
+    const mergedGeom = new THREE.BufferGeometry();
+    mergedGeom.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+    mergedGeom.setAttribute('normal', new THREE.BufferAttribute(normArr, 3));
+    if (uvArr) mergedGeom.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+    if (uv1Arr) mergedGeom.setAttribute('uv1', new THREE.BufferAttribute(uv1Arr, 2));
+    mergedGeom.setIndex(new THREE.BufferAttribute(idxArr, 1));
+    mergedGeom.computeBoundingSphere();
+
+    const batchMesh = new THREE.Mesh(mergedGeom, bucket.material);
+    batchMesh.castShadow = false;
+    batchMesh.receiveShadow = bucket.receiveShadow;
+    batchMesh.matrixAutoUpdate = false;
+    mergedGroup.add(batchMesh);
+  });
+
+  console.log(`Otimização WebGL: ${buckets.size} lotes combinados ativos para San Francisco.`);
+  return mergedGroup;
 }
 
 // ============================================================================
@@ -1689,9 +1827,13 @@ class MinimapRenderer {
 // 7. INICIALIZAÇÃO DO CENÁRIO 3D, LUZES DO CARRO, FÍSICA E LOOP PRINCIPAL
 // ============================================================================
 const container = document.getElementById('canvas-container');
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+const isLikelyMobileDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (window.innerWidth <= 820);
+const renderer = new THREE.WebGLRenderer({
+  antialias: !isLikelyMobileDevice,
+  powerPreference: 'high-performance'
+});
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1702,7 +1844,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b8de);
 scene.fog = new THREE.FogExp2(0x87b8de, 0.0018);
 
-const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.08, 900);
+const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.25, 900);
 
 const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x334155, 1.0);
 scene.add(hemiLight);
@@ -2418,6 +2560,11 @@ function applyGraphicsQuality(qualityKey) {
     m.needsUpdate = true;
   });
 
+  const cityEnvInt = preset.reflections === 'off' ? 0.0 : 0.22;
+  cityTrackedMaterials.forEach((m) => {
+    m.envMapIntensity = cityEnvInt;
+  });
+
   // 6. Ambiente & PMREM
   if (envTimeSystem) {
     envTimeSystem.setGraphicsPreset(preset);
@@ -2588,6 +2735,7 @@ async function initSimulation() {
     await buildCityPhysicsFromModel(cityRoot, world, groundMat, chassisMat, (pct) => {
       updateLoadingProgress(70 + pct * 0.15);
     });
+    scene.add(buildBatchedCityRenderGroup(cityRoot));
 
     updateLoadingProgress(85);
     await carAudio.loadAll((p) => {
@@ -2954,8 +3102,10 @@ function updateVehiclePhysicsAndEffects(dt) {
   vehicle.applyEngineForce(0, 2);
   vehicle.applyEngineForce(0, 3);
 
-  const serviceBrakeFront = state.brakeInput * 42;
-  const serviceBrakeRear = state.brakeInput * 24;
+  // Freio de serviço progressivo realista (frenagem gradual e controlável sem travar seco)
+  const speedBrakeFactor = THREE.MathUtils.clamp(0.60 + (state.speedKmh / 140) * 0.40, 0.60, 1.0);
+  const serviceBrakeFront = state.brakeInput * 14.5 * speedBrakeFactor;
+  const serviceBrakeRear = state.brakeInput * 8.5 * speedBrakeFactor;
   // Freio de mão mecânico real (aplica torque de travamento nas rodas traseiras 2 e 3)
   const handbrakeRear = isHandbraking ? 36 : 0;
 
@@ -3393,9 +3543,6 @@ function updateHUD() {
       banner.classList.remove('hud-hidden');
     } else if (state.handbrakeInput > 0.5 && state.speedKmh > 6) {
       banner.textContent = 'FREIO DE MÃO ACIONADO';
-      banner.classList.remove('hud-hidden');
-    } else if (state.turboInstalled && state.turboBoost >= 0.82 && (state.wheelSkids[0] > 0.60 || state.wheelSkids[1] > 0.60)) {
-      banner.textContent = '🔥 TURBO CHEIO (1.5 BAR) — FRENTE DESTRACIONANDO! 💨';
       banner.classList.remove('hud-hidden');
     } else {
       banner.classList.add('hud-hidden');
@@ -4205,7 +4352,7 @@ function animate(now) {
   lastTime = now;
 
   if (state.loaded) {
-    world.step(1 / 60, dt, 3);
+    world.step(1 / 60, dt, 2);
     if (chassisBody && chassisBody.position.y < 12.0) {
       resetCarToSpawn(state.spawnIdx);
     }
