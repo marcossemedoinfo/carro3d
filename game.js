@@ -218,6 +218,8 @@ const DEFAULT_KEYBINDS = {
   gearDown: 'Minus',
   transmission: 'KeyM',
   turbo: 'KeyT',
+  absToggle: 'KeyB',
+  tcsToggle: 'KeyK',
   headlights: 'KeyL',
   timeOfDay: 'KeyH',
   ignition: 'KeyI',
@@ -235,12 +237,79 @@ const KEYBIND_LABELS = [
   { action: 'gearDown', label: 'Reduzir Marcha' },
   { action: 'transmission', label: 'Câmbio Auto/Manual' },
   { action: 'turbo', label: 'Ativar / Desativar Turbo' },
+  { action: 'absToggle', label: 'Alternar Freios ABS' },
+  { action: 'tcsToggle', label: 'Alternar Controle Tração (TCS)' },
   { action: 'headlights', label: 'Ligar / Desligar Faróis' },
   { action: 'timeOfDay', label: 'Alternar Dia / Noite' },
   { action: 'ignition', label: 'Motor / Ignição' },
   { action: 'camera', label: 'Trocar Câmera' },
   { action: 'reset', label: 'Reposicionar Carro' }
 ];
+
+const SURFACE_PROFILES = {
+  asphalt: {
+    id: 'asphalt',
+    label: 'ASFALTO',
+    gripMul: 1.0,
+    rollingMul: 1.0,
+    skidVolMul: 1.0,
+    skidPitchMul: 1.0,
+    rumbleGain: 0.05,
+    rumbleRate: 0.46,
+    rumbleFreq: 340,
+    smokeColorHex: 0xe6ecf2
+  },
+  bridge: {
+    id: 'bridge',
+    label: 'PONTE',
+    gripMul: 0.94,
+    rollingMul: 0.92,
+    skidVolMul: 1.12,
+    skidPitchMul: 1.14,
+    rumbleGain: 0.16,
+    rumbleRate: 0.56,
+    rumbleFreq: 540,
+    smokeColorHex: 0xe2e8f0
+  },
+  sidewalk: {
+    id: 'sidewalk',
+    label: 'CALÇADA',
+    gripMul: 0.89,
+    rollingMul: 1.24,
+    skidVolMul: 1.18,
+    skidPitchMul: 0.86,
+    rumbleGain: 0.22,
+    rumbleRate: 0.36,
+    rumbleFreq: 420,
+    smokeColorHex: 0xd6d3d1
+  },
+  dirt: {
+    id: 'dirt',
+    label: 'TERRA / GRAMA',
+    gripMul: 0.68,
+    rollingMul: 2.15,
+    skidVolMul: 0.58,
+    skidPitchMul: 0.66,
+    rumbleGain: 0.26,
+    rumbleRate: 0.28,
+    rumbleFreq: 260,
+    smokeColorHex: 0xb59e7a
+  }
+};
+
+function getSavedAssistSettings() {
+  try {
+    const raw = localStorage.getItem('corsa3d_assists');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        abs: parsed.abs !== false,
+        tcs: parsed.tcs !== false
+      };
+    }
+  } catch (e) {}
+  return { abs: true, tcs: true };
+}
 
 function getSavedKeybinds() {
   try {
@@ -291,6 +360,15 @@ const state = {
   transmission: 'MANUAL', // 'MANUAL' ou 'AUTO'
   gear: 1,                // -1 = R, 0 = N, 1..5 = 1ª a 5ª marcha
   shiftCooldown: 0,
+  shiftDuration: 0.22,
+  shiftPhase: 'none',     // 'upshift' | 'downshift' | 'none'
+  clutchEngagement: 1.0,  // 0.0 (desacoplada) -> 1.0 (acoplada)
+  revMatchTargetRPM: 0,
+  absEnabled: getSavedAssistSettings().abs,
+  tcsEnabled: getSavedAssistSettings().tcs,
+  absActive: false,
+  tcsActive: false,
+  surfaceType: 'asphalt',
   rpm: 0,
   speedKmh: 0,
   forwardSpeedMs: 0,
@@ -472,6 +550,13 @@ class SpatialCarAudio {
     this.sources.revCutExhaust = this.createPositionalNode(this.exhaustAnchor, 2.2, 90, 180, 340, 0.6);
     this.sources.revCutEngine = this.createPositionalNode(this.engineAnchor, 1.8, 75);
     this.sources.skid = this.createPositionalNode(this.tiresAnchor, 2.2, 90);
+    this.sources.roadRumble = this.createPositionalNode(this.tiresAnchor, 1.8, 70);
+    try {
+      this.roadRumbleFilter = this.ctx.createBiquadFilter();
+      this.roadRumbleFilter.type = 'lowpass';
+      this.roadRumbleFilter.frequency.setValueAtTime(360, this.ctx.currentTime);
+      this.sources.roadRumble.setFilter(this.roadRumbleFilter);
+    } catch (e) {}
     this.sources.turbo = this.createPositionalNode(this.engineAnchor, 3.2, 95);
     if (this.rawBuffers.turbo) {
       this.sources.turbo.setBuffer(this.rawBuffers.turbo);
@@ -553,6 +638,7 @@ class SpatialCarAudio {
     this.startSlicedLoop(this.sources.revCutExhaust, this.slicedBuffers.revCut);
     this.startSlicedLoop(this.sources.revCutEngine, this.slicedBuffers.revCut);
     this.startSlicedLoop(this.sources.skid, this.slicedBuffers.skid);
+    this.startSlicedLoop(this.sources.roadRumble, this.slicedBuffers.skid);
   }
 
   startSlicedLoop(posAudio, slicedBuffer) {
@@ -627,11 +713,35 @@ class SpatialCarAudio {
     const turboGain = masterGain * state.audio.turbo;
     const tireGain = masterGain * state.audio.tires;
 
-    const skidVol = THREE.MathUtils.clamp(state.skidIntensity * 0.72, 0, 0.80) * tireGain;
-    const skidPitch = THREE.MathUtils.clamp(0.90 + state.skidIntensity * 0.20 + (state.speedKmh / 220) * 0.12, 0.85, 1.28);
+    const surfProfile = SURFACE_PROFILES[state.surfaceType] || SURFACE_PROFILES.asphalt;
+    const skidVol = THREE.MathUtils.clamp(state.skidIntensity * 0.72 * surfProfile.skidVolMul, 0, 0.85) * tireGain;
+    const skidPitch = THREE.MathUtils.clamp((0.90 + state.skidIntensity * 0.20 + (state.speedKmh / 220) * 0.12) * surfProfile.skidPitchMul, 0.58, 1.38);
     this.sources.skid.gain.gain.setTargetAtTime(skidVol, now, 0.04);
     if (this.sources.skid.source) {
       this.sources.skid.source.playbackRate.setTargetAtTime(skidPitch, now, 0.05);
+    }
+
+    // Textura sonora de rolagem por tipo de superfície (Asfalto, Ponte, Calçada, Terra)
+    if (this.sources.roadRumble && this.sources.roadRumble.gain) {
+      let wheelsGrounded = 0;
+      if (typeof vehicle !== 'undefined' && vehicle) {
+        for (let w = 0; w < 4; w++) {
+          if (vehicle.wheelInfos[w] && vehicle.wheelInfos[w].isInContact) wheelsGrounded++;
+        }
+      }
+      const rollingSpeedFactor = THREE.MathUtils.clamp((state.speedKmh - 8) / 85, 0, 1.0);
+      const rumbleVol = surfProfile.rumbleGain * rollingSpeedFactor * (wheelsGrounded * 0.25) * tireGain;
+      this.sources.roadRumble.gain.gain.setTargetAtTime(rumbleVol, now, 0.06);
+      if (this.sources.roadRumble.source) {
+        this.sources.roadRumble.source.playbackRate.setTargetAtTime(
+          surfProfile.rumbleRate + rollingSpeedFactor * 0.18,
+          now,
+          0.08
+        );
+      }
+      if (this.roadRumbleFilter) {
+        this.roadRumbleFilter.frequency.setTargetAtTime(surfProfile.rumbleFreq, now, 0.08);
+      }
     }
 
     if (!state.engineOn) {
@@ -1239,6 +1349,7 @@ class TireSkidMarkSystem {
 // ============================================================================
 let headlightMat = null;
 let brakeLightMat = null;
+let thirdBrakeLightMat = null;
 let reverseLightMat = null;
 
 const CAMERA_MODE_NAMES = ['PERSEGUIÇÃO', 'CAPÔ (MOTOR)', 'ESCAPAMENTO', 'ÓRBITA 3D'];
@@ -1344,6 +1455,16 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
     metalness: 0.1,
     transparent: true,
     opacity: 0.88
+  });
+
+  thirdBrakeLightMat = new THREE.MeshStandardMaterial({
+    color: 0x7f1d1d,
+    emissive: new THREE.Color(0xef4444),
+    emissiveIntensity: 0.0,
+    roughness: 0.20,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.90
   });
 
   reverseLightMat = new THREE.MeshStandardMaterial({
@@ -1457,6 +1578,7 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       '3': [],
       headlight: [],
       brakelight: [],
+      thirdbrakelight: [],
       reverselight: []
     };
 
@@ -1478,7 +1600,11 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
         const wIdx = getWheelIndex(cx, cz);
         buckets[wIdx].push(i0, i1, i2);
       } else if (matName === 'redglass') {
-        buckets.brakelight.push(i0, i1, i2);
+        if (Math.abs(cx) < 20 && cz > 110) {
+          buckets.thirdbrakelight.push(i0, i1, i2);
+        } else {
+          buckets.brakelight.push(i0, i1, i2);
+        }
       } else if (matName === 'clearglass' && cz < -120) {
         buckets.headlight.push(i0, i1, i2);
       } else if ((nodeName === 'object_43' || nodeName === 'object_41') && matName === 'clearglass' && cz > 140) {
@@ -1532,10 +1658,11 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       let matToUse = clonedMat;
       if (bKey === 'headlight') matToUse = headlightMat;
       else if (bKey === 'brakelight') matToUse = brakeLightMat;
+      else if (bKey === 'thirdbrakelight') matToUse = thirdBrakeLightMat;
       else if (bKey === 'reverselight') matToUse = reverseLightMat;
 
       const subMesh = new THREE.Mesh(subGeom, matToUse);
-      subMesh.castShadow = !['headlight', 'brakelight', 'reverselight'].includes(bKey);
+      subMesh.castShadow = !['headlight', 'brakelight', 'thirdbrakelight', 'reverselight'].includes(bKey);
       subMesh.receiveShadow = false;
 
       if (bIdx === -1) {
@@ -1639,11 +1766,11 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   const PLAY_MIN_Y = 14.0;
   const PLAY_MAX_Y = 105.0;
 
-  function appendTriToSector(sectorMap, sx, sz, ax, ay, az, bx, by, bz, cx, cy, cz) {
-    const sKey = `${sx}_${sz}`;
+  function appendTriToSector(sectorMap, sx, sz, surfaceType, ax, ay, az, bx, by, bz, cx, cy, cz) {
+    const sKey = surfaceType ? `${sx}_${sz}_${surfaceType}` : `${sx}_${sz}`;
     let sRoad = sectorMap.get(sKey);
     if (!sRoad) {
-      sRoad = { verts: [], indices: [], offset: 0 };
+      sRoad = { verts: [], indices: [], offset: 0, surfaceType: surfaceType || 'asphalt' };
       sectorMap.set(sKey, sRoad);
     }
     sRoad.verts.push(ax, ay, az, bx, by, bz, cx, cy, cz);
@@ -1722,6 +1849,15 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       !isNetworkBoundWall &&
       (isStreetOrBridge || path.includes('terrain_01') || path.includes('concrete_01'));
 
+    let meshSurfaceType = 'asphalt';
+    if (path.includes('bridge_01_connection') || path.includes('bridge_segment_01_03')) {
+      meshSurfaceType = 'bridge';
+    } else if (path.includes('terrain_01')) {
+      meshSurfaceType = 'dirt';
+    } else if (path.includes('sidewalk') || path.includes('lombard') || path.includes('concrete_01')) {
+      meshSurfaceType = 'sidewalk';
+    }
+
     const isSmallFoliageProp =
       !isGroundSurface &&
       (path.includes('/tree') || path.includes('bush') || path.includes('pot_'));
@@ -1762,10 +1898,10 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       if (isGroundSurface && normal.y > 0.35 && maxY <= 102.0) {
         const sx = Math.floor(midX / ROAD_SECTOR_SIZE);
         const sz = Math.floor(midZ / ROAD_SECTOR_SIZE);
-        appendTriToSector(roadSectorMap, sx, sz, v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+        appendTriToSector(roadSectorMap, sx, sz, meshSurfaceType, v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
 
         if (isStreetOrBridge) {
-          appendTriToSector(minimapRoadSectorMap, sx, sz, v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+          appendTriToSector(minimapRoadSectorMap, sx, sz, null, v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
         }
       }
       // 2. Paredes, Prédios, Guardrails da Ponte, Túneis e Limites de San Francisco
@@ -1813,6 +1949,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       material: groundMaterial,
       shape: roadTrimesh
     });
+    roadBody.surfaceType = sRoad.surfaceType || 'asphalt';
     roadBody.collisionFilterGroup = COLLISION_GROUND;
     roadBody.collisionFilterMask = COLLISION_CHASSIS | COLLISION_WALLS;
     physicsWorld.addBody(roadBody);
@@ -3088,12 +3225,12 @@ let chassisBody = null;
 let corsaChassisVisual = null;
 let corsaWheelVisuals = [];
 
-// Luzes funcionais 3D do Corsa (Faróis Halógenos, Lanternas/Freio Esquerda/Direita e Luzes de Ré Direcionais)
+// Luzes funcionais 3D do Corsa (Faróis Halógenos, Freios Direcionais e Luzes de Ré Direcionais)
 // Importante: mantemos .visible = false quando apagadas para que o shader PBR da GPU não avalie luzes de intensidade zero!
 let headlightSpotL = null;
 let headlightSpotR = null;
-let brakeLightPointL = null;
-let brakeLightPointR = null;
+let brakeSpotL = null;
+let brakeSpotR = null;
 let reverseSpotL = null;
 let reverseSpotR = null;
 
@@ -3124,16 +3261,18 @@ function setupCarLights(chassisGroup) {
   headlightSpotR.visible = false;
   chassisGroup.add(headlightSpotR, headlightSpotR.target);
 
-  // Luzes de lanterna/freio posicionadas exatamente nos blocos esquerdo e direito (longe da placa central!)
-  brakeLightPointL = new THREE.PointLight(0xff2222, 0, 2.6, 2.0);
-  brakeLightPointL.position.set(-0.64 * CAR_SCALE, 0.21 * CAR_SCALE, 1.86 * CAR_SCALE);
-  brakeLightPointL.visible = false;
-  chassisGroup.add(brakeLightPointL);
+  // Luzes de freio como SpotLights direcionais saindo do bloco da lanterna para trás/asfalto (zero reflexo na tampa/placa)
+  brakeSpotL = new THREE.SpotLight(0xff1e1e, 0, 4.5, Math.PI * 0.34, 0.85, 1.8);
+  brakeSpotL.position.set(-0.64 * CAR_SCALE, 0.215 * CAR_SCALE, 1.78 * CAR_SCALE);
+  brakeSpotL.target.position.set(-0.78 * CAR_SCALE, -0.40 * CAR_SCALE, 6.2 * CAR_SCALE);
+  brakeSpotL.visible = false;
+  chassisGroup.add(brakeSpotL, brakeSpotL.target);
 
-  brakeLightPointR = new THREE.PointLight(0xff2222, 0, 2.6, 2.0);
-  brakeLightPointR.position.set(0.64 * CAR_SCALE, 0.21 * CAR_SCALE, 1.86 * CAR_SCALE);
-  brakeLightPointR.visible = false;
-  chassisGroup.add(brakeLightPointR);
+  brakeSpotR = new THREE.SpotLight(0xff1e1e, 0, 4.5, Math.PI * 0.34, 0.85, 1.8);
+  brakeSpotR.position.set(0.64 * CAR_SCALE, 0.215 * CAR_SCALE, 1.78 * CAR_SCALE);
+  brakeSpotR.target.position.set(0.78 * CAR_SCALE, -0.40 * CAR_SCALE, 6.2 * CAR_SCALE);
+  brakeSpotR.visible = false;
+  chassisGroup.add(brakeSpotR, brakeSpotR.target);
 
   // Faróis de ré em SpotLight saindo de cada lanterna traseira e projetando cone para trás/chão sem iluminar a placa
   reverseSpotL = new THREE.SpotLight(0xfff6d6, 0, 12.0, Math.PI * 0.26, 0.65, 1.6);
@@ -3271,8 +3410,9 @@ function applyChassisSimulationForces() {
       if (vehicle.wheelInfos[i] && vehicle.wheelInfos[i].isInContact) wheelsOnGround++;
     }
     const groundFactor = wheelsOnGround * 0.25;
+    const surfProfile = SURFACE_PROFILES[state.surfaceType] || SURFACE_PROFILES.asphalt;
     const dragMag = 0.92 * speedSq;
-    const rollResMag = 132.0 * groundFactor * Math.min(1.0, speed / 0.6);
+    const rollResMag = 132.0 * surfProfile.rollingMul * groundFactor * Math.min(1.0, speed / 0.6);
 
     const totalResist = dragMag + rollResMag;
     tempCannonForce.set(-vx * invSpeed * totalResist, -vy * invSpeed * (dragMag * 0.35), -vz * invSpeed * totalResist);
@@ -3364,6 +3504,12 @@ function resetCarToSpawn(spawnIndex = state.spawnIdx) {
   state.throttleInput = 0;
   state.brakeInput = 0;
   state.shiftCooldown = 0;
+  state.shiftPhase = 'none';
+  state.clutchEngagement = 1.0;
+  state.revMatchTargetRPM = 0;
+  state.absActive = false;
+  state.tcsActive = false;
+  state.surfaceType = 'asphalt';
   state.cuttingRev = false;
   for (let i = 0; i < 4; i++) state.wheelSkids[i] = 0;
   skidMarkSystem.resetWheelLinks();
@@ -3520,7 +3666,15 @@ function updateVehiclePhysicsAndEffects(dt) {
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer > 0 ? 1.04 : 0.96), 0); // FL
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer < 0 ? 1.04 : 0.96), 1); // FR
 
-  if (state.shiftCooldown > 0) state.shiftCooldown = Math.max(0, state.shiftCooldown - dt);
+  if (state.shiftCooldown > 0) {
+    state.shiftCooldown = Math.max(0, state.shiftCooldown - dt);
+    const shiftProg = 1.0 - state.shiftCooldown / Math.max(0.05, state.shiftDuration);
+    state.clutchEngagement = THREE.MathUtils.smoothstep(shiftProg, 0.24, 1.0);
+    if (state.shiftCooldown === 0) state.shiftPhase = 'none';
+  } else {
+    state.clutchEngagement = 1.0;
+    state.shiftPhase = 'none';
+  }
 
   // Escalonamento dinâmico de velocidades máximas por marcha (alonga automaticamente com Turbo ligado)
   const maxGearSpeedKmh = getGearMaxSpeedKmh(state.gear);
@@ -3534,7 +3688,13 @@ function updateVehiclePhysicsAndEffects(dt) {
   } else {
     if (state.gear === 0) {
       const targetFreeRPM = CORSA_SPECS.IdleRPM + state.throttleInput * (CORSA_SPECS.MaxRPM - CORSA_SPECS.IdleRPM + 350);
-      state.rpm = THREE.MathUtils.lerp(state.rpm, targetFreeRPM, dt * (state.throttleInput > 0.05 ? 6.5 : 4.5));
+      state.rpm = THREE.MathUtils.lerp(state.rpm, targetFreeRPM, dt * (state.throttleInput > 0.05 ? 7.0 : 4.2));
+    } else if (state.shiftPhase === 'downshift' && state.shiftCooldown > state.shiftDuration * 0.35) {
+      // Ponta-taco / Rev-Match automático na redução: golpe de giro suave para igualar a marcha inferior
+      state.rpm = THREE.MathUtils.lerp(state.rpm, state.revMatchTargetRPM, Math.min(1, dt * 18.0));
+    } else if (state.shiftPhase === 'upshift' && state.shiftCooldown > 0) {
+      // Inércia real do volante do motor na subida de marcha (queda progressiva do giro)
+      state.rpm = THREE.MathUtils.lerp(state.rpm, Math.max(CORSA_SPECS.IdleRPM, wheelDrivenRPM), Math.min(1, dt * 6.8));
     } else {
       const clutchSlipRPM =
         state.throttleInput *
@@ -3610,56 +3770,122 @@ function updateVehiclePhysicsAndEffects(dt) {
     state.speedKmh < 95;
 
   // ==========================================================================
-  // FREIO DE MÃO MECÂNICO REALISTA & DESTRACIONAMENTO FRONTAL POR TURBO CHEIO
+  // SUPERFÍCIES, SENSIBILIDADE DE CARGA, DIFERENCIAL ABERTO/LSD, ABS & TCS
   // ==========================================================================
   const isHandbraking = state.handbrakeInput > 0.5;
+  const nominalWheelLoad = (CORSA_SPECS.mass * 9.81) / 4.0;
+  const wheelSurfaces = ['asphalt', 'asphalt', 'asphalt', 'asphalt'];
+  const surfaceCounts = { asphalt: 0, bridge: 0, sidewalk: 0, dirt: 0 };
+  const wheelLoads = [nominalWheelLoad, nominalWheelLoad, nominalWheelLoad, nominalWheelLoad];
 
-  // Modelo dinâmico de aderência dos pneus (círculo de atrito + transferência de carga longitudinal)
+  for (let i = 0; i < 4; i++) {
+    const wi = vehicle.wheelInfos[i];
+    if (wi && wi.isInContact) {
+      const hitBody = wi.raycastResult && wi.raycastResult.body;
+      const sId = (hitBody && hitBody.surfaceType) || 'asphalt';
+      wheelSurfaces[i] = sId;
+      surfaceCounts[sId] = (surfaceCounts[sId] || 0) + 1;
+      wheelLoads[i] = THREE.MathUtils.clamp(wi.suspensionForce || nominalWheelLoad, nominalWheelLoad * 0.15, nominalWheelLoad * 2.5);
+    }
+  }
+
+  let dominantSurface = 'asphalt';
+  if (surfaceCounts.dirt >= 2) dominantSurface = 'dirt';
+  else if (surfaceCounts.bridge >= 2) dominantSurface = 'bridge';
+  else if (surfaceCounts.sidewalk >= 2) dominantSurface = 'sidewalk';
+  else if (surfaceCounts.dirt === 1 && surfaceCounts.asphalt <= 2) dominantSurface = wheelSurfaces[0] !== 'asphalt' ? wheelSurfaces[0] : wheelSurfaces[1];
+  state.surfaceType = dominantSurface;
+  const activeSurfProfile = SURFACE_PROFILES[dominantSurface] || SURFACE_PROFILES.asphalt;
+
+  // Assistência 1: ABS (Freio Anti-Travamento com modulação a ~13.5 Hz preservando esterço)
+  const isABSEngaging = state.absEnabled && state.brakeInput > 0.68 && state.speedKmh > 12 && !isHandbraking;
+  state.absActive = isABSEngaging;
+  const absBrakePulse = isABSEngaging ? (0.74 + 0.28 * Math.sin(performance.now() * 0.085)) : 1.0;
+
+  // Assistência 2: Controle de Tração (TCS — corta excesso de torque quando há destracionamento dianteiro)
+  const isFastLaunchAccel =
+    state.engineOn &&
+    state.throttleInput > 0.85 &&
+    state.gear === 1 &&
+    state.speedKmh > 0.5 &&
+    state.speedKmh < 12;
+  const wantsWheelSpin =
+    state.engineOn &&
+    state.gear > 0 &&
+    state.throttleInput > 0.58 &&
+    !isHandbraking &&
+    (isFrontWheelSpinningTurbo || isFastLaunchAccel || (state.forwardSpeedMs > 2.5 && absSlipDeg > 13.5));
+
+  state.tcsActive = state.tcsEnabled && wantsWheelSpin;
+  const tcsTorqueMultiplier = state.tcsActive ? (isFrontWheelSpinningTurbo ? 0.44 : 0.62) : 1.0;
+
+  // Modelo dinâmico de aderência dos pneus (círculo de atrito + carga vertical + tipo de superfície)
   const baseGrip = CORSA_SPECS.frictionSlipNormal;
   const slipDropFactor = THREE.MathUtils.clamp((absSlipDeg - 13.0) / 32.0, 0, 1.0);
   const lateralGripPenalty = slipDropFactor * 0.28;
 
-  const brakeFrontBonus = Math.max(0, state.longitudinalLoad) * 0.06;
+  const brakeFrontBonus = Math.max(0, state.longitudinalLoad) * 0.06 + (isABSEngaging ? 0.09 : 0.0);
   const brakeRearUnloading = Math.max(0, state.longitudinalLoad) * 0.16;
   const accelFrontUnloading = Math.max(0, -state.longitudinalLoad) * 0.10;
 
-  const dynamicFrontGrip = THREE.MathUtils.clamp(
+  const baseDynamicFront = THREE.MathUtils.clamp(
     baseGrip + brakeFrontBonus - accelFrontUnloading - lateralGripPenalty * 0.90,
     1.22,
-    1.76
+    1.80
   );
-  const dynamicRearGrip = THREE.MathUtils.clamp(
+  const baseDynamicRear = THREE.MathUtils.clamp(
     baseGrip - brakeRearUnloading - lateralGripPenalty * 1.05,
     1.18,
     1.72
   );
 
+  // Sensibilidade à carga vertical (Load Sensitivity): pneu sobrecarregado perde eficiência proporcionalmente
+  const loadRatioFL = wheelLoads[0] / nominalWheelLoad;
+  const loadRatioFR = wheelLoads[1] / nominalWheelLoad;
+  const loadRatioRL = wheelLoads[2] / nominalWheelLoad;
+  const loadRatioRR = wheelLoads[3] / nominalWheelLoad;
+  const loadSens = (lr) => THREE.MathUtils.clamp(1.06 - (lr - 1.0) * 0.11, 0.82, 1.14);
+
+  const surfGrip0 = (SURFACE_PROFILES[wheelSurfaces[0]] || activeSurfProfile).gripMul;
+  const surfGrip1 = (SURFACE_PROFILES[wheelSurfaces[1]] || activeSurfProfile).gripMul;
+  const surfGrip2 = (SURFACE_PROFILES[wheelSurfaces[2]] || activeSurfProfile).gripMul;
+  const surfGrip3 = (SURFACE_PROFILES[wheelSurfaces[3]] || activeSurfProfile).gripMul;
+
+  // Diferencial aberto (Aspirado) faz a roda dianteira interna aliviada perder tração mais cedo em curva forte
+  const openDiffSlipFL = !state.turboInstalled && state.throttleInput > 0.65 && loadRatioFL < 0.78 ? 0.84 : 1.0;
+  const openDiffSlipFR = !state.turboInstalled && state.throttleInput > 0.65 && loadRatioFR < 0.78 ? 0.84 : 1.0;
+
   if (isHandbraking) {
     // Freio de mão mecânico atua exclusivamente travando as rodas traseiras (preserva resposta exata!)
-    vehicle.wheelInfos[0].frictionSlip = baseGrip;
-    vehicle.wheelInfos[1].frictionSlip = baseGrip;
-    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
-    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipHandbrake;
-  } else if (isFrontWheelSpinningTurbo) {
-    // SÓ QUANDO O TURBO ENCHER: o carro destraciona a frente violentamente!
-    vehicle.wheelInfos[0].frictionSlip = 0.72;
-    vehicle.wheelInfos[1].frictionSlip = 0.72;
-    vehicle.wheelInfos[2].frictionSlip = dynamicRearGrip;
-    vehicle.wheelInfos[3].frictionSlip = dynamicRearGrip;
+    vehicle.wheelInfos[0].frictionSlip = baseGrip * surfGrip0 * loadSens(loadRatioFL);
+    vehicle.wheelInfos[1].frictionSlip = baseGrip * surfGrip1 * loadSens(loadRatioFR);
+    vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipHandbrake * surfGrip2;
+    vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipHandbrake * surfGrip3;
+  } else if (isFrontWheelSpinningTurbo && !state.tcsActive) {
+    // SÓ QUANDO O TURBO ENCHER (e sem TCS segurando): o carro destraciona a frente violentamente!
+    vehicle.wheelInfos[0].frictionSlip = 0.72 * surfGrip0;
+    vehicle.wheelInfos[1].frictionSlip = 0.72 * surfGrip1;
+    vehicle.wheelInfos[2].frictionSlip = baseDynamicRear * surfGrip2 * loadSens(loadRatioRL);
+    vehicle.wheelInfos[3].frictionSlip = baseDynamicRear * surfGrip3 * loadSens(loadRatioRR);
+  } else if (state.tcsActive && isFrontWheelSpinningTurbo) {
+    // TCS modula o escorregamento dianteiro mantendo o carro controlável
+    vehicle.wheelInfos[0].frictionSlip = 1.24 * surfGrip0 * loadSens(loadRatioFL);
+    vehicle.wheelInfos[1].frictionSlip = 1.24 * surfGrip1 * loadSens(loadRatioFR);
+    vehicle.wheelInfos[2].frictionSlip = baseDynamicRear * surfGrip2 * loadSens(loadRatioRL);
+    vehicle.wheelInfos[3].frictionSlip = baseDynamicRear * surfGrip3 * loadSens(loadRatioRR);
   } else {
-    // Condução normal/esportiva: atrito responde dinamicamente ao peso na frenagem, aceleração e derrapagem
-    vehicle.wheelInfos[0].frictionSlip = dynamicFrontGrip;
-    vehicle.wheelInfos[1].frictionSlip = dynamicFrontGrip;
-    vehicle.wheelInfos[2].frictionSlip = dynamicRearGrip;
-    vehicle.wheelInfos[3].frictionSlip = dynamicRearGrip;
+    vehicle.wheelInfos[0].frictionSlip = baseDynamicFront * surfGrip0 * loadSens(loadRatioFL) * openDiffSlipFL;
+    vehicle.wheelInfos[1].frictionSlip = baseDynamicFront * surfGrip1 * loadSens(loadRatioFR) * openDiffSlipFR;
+    vehicle.wheelInfos[2].frictionSlip = baseDynamicRear * surfGrip2 * loadSens(loadRatioRL);
+    vehicle.wheelInfos[3].frictionSlip = baseDynamicRear * surfGrip3 * loadSens(loadRatioRR);
   }
 
-  // Curva de Torque Realista + Limitador Físico de Velocidade por Marcha
+  // Curva de Torque Realista + Inércia de Embreagem + Limitador Físico de Velocidade por Marcha
   const rpmNorm = THREE.MathUtils.clamp((state.rpm - 800) / 5800, 0, 1);
   const torqueCurve = 0.55 + 0.45 * Math.sin(rpmNorm * Math.PI * 0.85);
   let wheelDriveForce = 0;
 
-  if (state.engineOn && state.gear !== 0 && state.shiftCooldown <= 0.05) {
+  if (state.engineOn && state.gear !== 0) {
     const baseGearForce = CORSA_SPECS.gearDriveForces[String(state.gear)] || 0;
 
     let speedLimiterFactor = 1.0;
@@ -3669,41 +3895,63 @@ function updateVehiclePhysicsAndEffects(dt) {
       speedLimiterFactor = (maxGearSpeedKmh - state.speedKmh) / 2.5;
     }
 
-    // Curva de potência do Turbo:
-    // Sem turbo: 1.0x
-    // Turbo enchendo: ganho gradual de 1.0x a 1.30x
-    // Turbo CHEIO (>= 0.82): EXPLOSÃO DE POTÊNCIA (1.95x de torque!)
     let turboBoostFactor = 1.0;
     if (state.turboInstalled) {
       if (isTurboFull) {
-        turboBoostFactor = 1.95; // Muita potência quando o turbo enche!
+        turboBoostFactor = 1.95;
       } else {
         turboBoostFactor = 1.0 + state.turboBoost * 0.30;
       }
     }
 
-    wheelDriveForce = state.throttleInput * baseGearForce * torqueCurve * speedLimiterFactor * turboBoostFactor;
+    wheelDriveForce =
+      state.throttleInput *
+      baseGearForce *
+      torqueCurve *
+      speedLimiterFactor *
+      turboBoostFactor *
+      state.clutchEngagement *
+      tcsTorqueMultiplier;
 
     if (state.speedKmh > maxGearSpeedKmh + 1.5) {
-      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * 1650;
+      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * 1650 * state.clutchEngagement;
     } else if (state.throttleInput < 0.05 && state.speedKmh > 4) {
       // Freio-motor realista escalonado por relação de marcha (1ª segura mais que 5ª)
       const gearEngineBrakeRatio = 0.60 + (6 - Math.min(5, Math.abs(state.gear))) * 0.14;
-      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * (205 + rpmNorm * 325) * gearEngineBrakeRatio;
+      wheelDriveForce = -Math.sign(state.forwardSpeedMs) * (205 + rpmNorm * 325) * gearEngineBrakeRatio * state.clutchEngagement;
     }
   }
 
-  // TRAÇÃO DIANTEIRA (FWD): Força aplicada exclusivamente nas rodas 0 (FL) e 1 (FR)
-  // (Arrasto aerodinâmico e resistência de rolamento atuam diretamente no chassi via preStep)
-  vehicle.applyEngineForce(wheelDriveForce, 0);
-  vehicle.applyEngineForce(wheelDriveForce, 1);
+  // Diferencial Dianteiro: Aberto (Aspirado) vs. Helicoidal LSD (Kit Turbo)
+  let driveForceL = wheelDriveForce;
+  let driveForceR = wheelDriveForce;
+  if (wheelDriveForce > 0) {
+    const frontLoadSum = Math.max(400, wheelLoads[0] + wheelLoads[1]);
+    if (state.turboInstalled) {
+      // LSD Helicoidal (45% lock): transfere torque da roda interna leve para a externa carregada
+      const shareL = wheelLoads[0] / frontLoadSum;
+      const shareR = wheelLoads[1] / frontLoadSum;
+      driveForceL = wheelDriveForce * (0.55 + shareL * 0.90);
+      driveForceR = wheelDriveForce * (0.55 + shareR * 0.90);
+    } else {
+      // Diferencial aberto: tração máxima limitada pela roda interna mais aliviada em curvas fechadas
+      const minFrontRatio = Math.min(wheelLoads[0], wheelLoads[1]) / (frontLoadSum * 0.5);
+      const openDiffCap = THREE.MathUtils.clamp(minFrontRatio * 1.18, 0.62, 1.0);
+      driveForceL = wheelDriveForce * openDiffCap;
+      driveForceR = wheelDriveForce * openDiffCap;
+    }
+  }
+
+  // TRAÇÃO DIANTEIRA (FWD): Força aplicada nas rodas 0 (FL) e 1 (FR) segundo o diferencial ativo
+  vehicle.applyEngineForce(driveForceL, 0);
+  vehicle.applyEngineForce(driveForceR, 1);
   vehicle.applyEngineForce(0, 2);
   vehicle.applyEngineForce(0, 3);
 
-  // Freio de serviço progressivo realista calibrado para 920kg (proporcional ao pedal, dianteira 63% / traseira 37%)
+  // Freio de serviço progressivo calibrado para 920kg + modulação ABS se ativado
   const speedBrakeFactor = THREE.MathUtils.clamp(0.60 + (state.speedKmh / 140) * 0.40, 0.60, 1.0);
-  const serviceBrakeFront = state.brakeInput * 27.8 * speedBrakeFactor;
-  const serviceBrakeRear = state.brakeInput * 16.3 * speedBrakeFactor;
+  const serviceBrakeFront = state.brakeInput * 27.8 * speedBrakeFactor * absBrakePulse;
+  const serviceBrakeRear = state.brakeInput * 16.3 * speedBrakeFactor * absBrakePulse;
   // Freio de mão mecânico real (escala proporcional 920/480 para preservar exatamente o mesmo drift!)
   const handbrakeRear = isHandbraking ? 69 : 0;
 
@@ -3713,7 +3961,7 @@ function updateVehiclePhysicsAndEffects(dt) {
   vehicle.setBrake(Math.max(serviceBrakeRear, handbrakeRear), 3);
 
   // ==========================================================================
-  // ATUALIZAÇÃO EM TEMPO REAL DOS FARÓIS (BRANCO QUENTE), FREIO E RÉ (BRILHO SUAVE)
+  // ATUALIZAÇÃO EM TEMPO REAL DOS FARÓIS, LANTERNA, 3º BRAKE LIGHT E RÉ
   // ==========================================================================
   if (headlightMat) {
     headlightMat.emissive.setHex(state.headlightsOn ? 0xffd56b : 0x000000);
@@ -3729,15 +3977,17 @@ function updateVehiclePhysicsAndEffects(dt) {
 
   const isBrakingNow = state.brakeInput > 0.08 || state.handbrakeInput > 0.08;
   if (brakeLightMat) {
-    brakeLightMat.emissiveIntensity = isBrakingNow ? 1.45 : state.headlightsOn ? 0.32 : 0.0;
+    brakeLightMat.emissiveIntensity = isBrakingNow ? 1.65 : state.headlightsOn ? 0.55 : 0.0;
   }
-  if (brakeLightPointL && brakeLightPointR) {
-    const brakePointIntensity = isBrakingNow ? 1.25 : state.headlightsOn ? 0.28 : 0.0;
-    const brakeVis = brakePointIntensity > 0.01;
-    brakeLightPointL.intensity = brakePointIntensity;
-    brakeLightPointR.intensity = brakePointIntensity;
-    brakeLightPointL.visible = brakeVis;
-    brakeLightPointR.visible = brakeVis;
+  if (thirdBrakeLightMat) {
+    thirdBrakeLightMat.emissiveIntensity = isBrakingNow ? 1.80 : 0.0;
+  }
+  if (brakeSpotL && brakeSpotR) {
+    const brakeSpotIntensity = isBrakingNow ? 1.85 : 0.0;
+    brakeSpotL.intensity = brakeSpotIntensity;
+    brakeSpotR.intensity = brakeSpotIntensity;
+    brakeSpotL.visible = isBrakingNow;
+    brakeSpotR.visible = isBrakingNow;
   }
 
   const isReverseEngaged = state.gear === -1;
@@ -3772,7 +4022,7 @@ function updateVehiclePhysicsAndEffects(dt) {
     wheelSpinAngles[i] -= wOmega * dt;
   }
 
-  const isHardBrakingHighSpeed = state.brakeInput > 0.78 && state.speedKmh > 18;
+  const isHardBrakingHighSpeed = state.brakeInput > 0.78 && state.speedKmh > 18 && !isABSEngaging;
   const isCorneringHard = horizSpeedMs > 5.0 && absSlipDeg > 11.5 && !isHandbraking;
   const lateralCornerSkid = isCorneringHard
     ? THREE.MathUtils.clamp((absSlipDeg - 11.5) / 22.0, 0.15, 0.88)
@@ -3780,6 +4030,7 @@ function updateVehiclePhysicsAndEffects(dt) {
   const isFastLaunchBurnout =
     state.engineOn &&
     state.throttleInput > 0.90 &&
+    !state.tcsActive &&
     ((state.gear === 1 && state.speedKmh > 0.5 && state.speedKmh < 9) ||
       (isHandbraking && state.gear !== 0 && state.speedKmh < 16));
 
@@ -3799,14 +4050,17 @@ function updateVehiclePhysicsAndEffects(dt) {
       if (i < 2 && isFastLaunchBurnout) {
         wSkid = Math.max(wSkid, 0.78);
       }
-      // SÓ QUANDO O TURBO ENCHER: as rodas dianteiras destracionam com fumaça intensa e borracha queimando
-      if (i < 2 && isFrontWheelSpinningTurbo) {
+      // SÓ QUANDO O TURBO ENCHER (sem TCS ativo): as rodas dianteiras destracionam com fumaça intensa
+      if (i < 2 && isFrontWheelSpinningTurbo && !state.tcsActive) {
         wSkid = Math.max(wSkid, 0.96);
       }
       if (isHardBrakingHighSpeed) {
-        // Travamento progressivo sob frenagem forte (mais intenso na dianteira 63%)
+        // Travamento progressivo sob frenagem forte (ABS OFF)
         const brakeSkid = THREE.MathUtils.clamp((state.speedKmh - 14) / 48, 0.34, 0.95);
         wSkid = Math.max(wSkid, i < 2 ? brakeSkid : brakeSkid * 0.72);
+      } else if (isABSEngaging) {
+        // ABS modulando: apenas leve chiado intermitente no limite sem travar pneu
+        wSkid = Math.max(wSkid, 0.22);
       }
       if (i >= 2 && isHandbraking && state.speedKmh > 3.5) {
         wSkid = Math.max(wSkid, THREE.MathUtils.clamp((state.speedKmh - 2) / 14, 0.45, 0.90));
@@ -3843,39 +4097,46 @@ function updateVehiclePhysicsAndEffects(dt) {
       skidMarkSystem.recordWheel(i, null, tempSkidNormal, tempChassisRight, 0);
     }
 
-    if (wSkid > 0.28 && Math.random() < wSkid * 0.96) {
+    const wSurf = SURFACE_PROFILES[wheelSurfaces[i]] || activeSurfProfile;
+    const isDustyWheel = wheelSurfaces[i] === 'dirt' && wi.isInContact && state.speedKmh > 18;
+    if ((wSkid > 0.28 || isDustyWheel) && Math.random() < Math.max(wSkid * 0.96, isDustyWheel ? 0.35 : 0)) {
       const wTransform = wi.worldTransform;
-      const puffCount = wSkid > 0.72 && state.graphicsQuality !== 'low' ? 2 : 1;
+      const effSkid = Math.max(wSkid, isDustyWheel ? 0.36 : 0);
+      const puffCount = effSkid > 0.72 && state.graphicsQuality !== 'low' ? 2 : 1;
       for (let p = 0; p < puffCount; p++) {
         tempWheelPos.set(
           wTransform.position.x + (Math.random() - 0.5) * 0.16,
           wTransform.position.y - CORSA_SPECS.wheelRadius + 0.06,
           wTransform.position.z + (Math.random() - 0.5) * 0.16
         );
-        const lateralOut = (i % 2 === 0 ? -1 : 1) * (0.35 + Math.random() * 0.45) * wSkid;
+        const lateralOut = (i % 2 === 0 ? -1 : 1) * (0.35 + Math.random() * 0.45) * effSkid;
         tempSmokeVel.set(
           -chassisBody.velocity.x * 0.24 + tempChassisRight.x * lateralOut + (Math.random() - 0.5) * 0.95,
-          0.42 + Math.random() * 0.52 + wSkid * 0.25,
+          0.42 + Math.random() * 0.52 + effSkid * 0.25,
           -chassisBody.velocity.z * 0.24 + tempChassisRight.z * lateralOut + (Math.random() - 0.5) * 0.95
         );
         smokeSystem.spawn(tempWheelPos, tempSmokeVel, {
-          startScale: 0.24 + wSkid * 0.08,
-          endScale: 1.75 + wSkid * 1.15 + Math.random() * 0.45,
-          opacity: 0.34 + wSkid * 0.18,
+          startScale: 0.24 + effSkid * 0.08,
+          endScale: 1.75 + effSkid * 1.15 + Math.random() * 0.45,
+          opacity: (isDustyWheel ? 0.26 : 0.34) + effSkid * 0.18,
           maxAge: 1.15 + Math.random() * 0.85,
           buoyancy: 0.65 + Math.random() * 0.35,
           drag: 0.36,
-          colorHex: 0xe6ecf2
+          colorHex: wSurf.smokeColorHex
         });
       }
     }
   }
   skidMarkSystem.commitUpdates();
 
-  // Torque-steer suave quando destraciona a frente com turbo cheio (oscilação contínua, sem tremedeira aleatória)
-  if (isFrontWheelSpinningTurbo) {
+  // Torque-steer real pelo desequilíbrio do diferencial dianteiro + surto de turbo cheio sem TCS
+  if (driveForceR !== driveForceL) {
+    const torqueDiff = THREE.MathUtils.clamp((driveForceR - driveForceL) / 3400, -0.40, 0.40);
+    chassisBody.angularVelocity.y += torqueDiff * dt;
+  }
+  if (isFrontWheelSpinningTurbo && !state.tcsActive) {
     const tq = Math.sin(performance.now() * 0.006) * 0.9 + Math.sin(performance.now() * 0.0137) * 0.5;
-    chassisBody.angularVelocity.y += tq * 0.25 * dt;
+    chassisBody.angularVelocity.y += tq * 0.24 * dt;
   }
 
   state.skidIntensity = THREE.MathUtils.lerp(state.skidIntensity, maxSkid, Math.min(1, dt * 12));
@@ -4134,7 +4395,19 @@ const hudDom = {
   todLabel: document.getElementById('tod-label'),
   btnTod: document.getElementById('btn-tod'),
   mTodTxt: document.getElementById('m-tod-txt'),
-  mBtnTod: document.getElementById('mbtn-tod')
+  mBtnTod: document.getElementById('mbtn-tod'),
+  btnAbs: document.getElementById('btn-abs'),
+  absLabel: document.getElementById('abs-label'),
+  mBtnAbs: document.getElementById('mbtn-abs'),
+  mAbsTxt: document.getElementById('m-abs-txt'),
+  menuAbsLabel: document.getElementById('menu-abs-label'),
+  menuAbsBtn: document.getElementById('menu-abs-btn'),
+  btnTcs: document.getElementById('btn-tcs'),
+  tcsLabel: document.getElementById('tcs-label'),
+  mBtnTcs: document.getElementById('mbtn-tcs'),
+  mTcsTxt: document.getElementById('m-tcs-txt'),
+  menuTcsLabel: document.getElementById('menu-tcs-label'),
+  menuTcsBtn: document.getElementById('menu-tcs-btn')
 };
 
 function updateHUD() {
@@ -4263,6 +4536,12 @@ function updateHUD() {
       hudDom.mBtnTurbo.classList.remove('turbo-full');
     }
   }
+
+  // Indicação luminosa em tempo real de atuação do ABS e Controle de Tração (TCS)
+  if (hudDom.btnAbs) hudDom.btnAbs.classList.toggle('assist-intervening', state.absActive);
+  if (hudDom.mBtnAbs) hudDom.mBtnAbs.classList.toggle('assist-intervening', state.absActive);
+  if (hudDom.btnTcs) hudDom.btnTcs.classList.toggle('assist-intervening', state.tcsActive);
+  if (hudDom.mBtnTcs) hudDom.mBtnTcs.classList.toggle('assist-intervening', state.tcsActive);
 }
 
 // ============================================================================
@@ -4271,8 +4550,29 @@ function updateHUD() {
 function changeGear(newGear) {
   const clamped = THREE.MathUtils.clamp(newGear, -1, 5);
   if (clamped !== state.gear) {
+    const prevGear = state.gear;
     state.gear = clamped;
-    state.shiftCooldown = 0.14;
+    state.shiftDuration = prevGear !== 0 && clamped !== 0 ? 0.22 : 0.14;
+    state.shiftCooldown = state.shiftDuration;
+    state.clutchEngagement = 0.05;
+
+    // Simulação de inércia de embreagem (upshift) e Rev-Match automático (downshift)
+    if (prevGear !== 0 && clamped !== 0 && state.engineOn) {
+      const nextMax = getGearMaxSpeedKmh(clamped);
+      const nextRatio = nextMax > 0 ? state.speedKmh / nextMax : 0;
+      const targetNextRPM = CORSA_SPECS.IdleRPM + nextRatio * (CORSA_SPECS.RedlineRPM - CORSA_SPECS.IdleRPM);
+
+      if (clamped < prevGear && state.speedKmh > 6) {
+        state.shiftPhase = 'downshift';
+        state.revMatchTargetRPM = THREE.MathUtils.clamp(targetNextRPM * 1.07, CORSA_SPECS.IdleRPM + 300, CORSA_SPECS.RedlineRPM - 150);
+      } else if (clamped > prevGear) {
+        state.shiftPhase = 'upshift';
+      } else {
+        state.shiftPhase = 'none';
+      }
+    } else {
+      state.shiftPhase = 'none';
+    }
 
     // A válvula de alívio SÓ espirra nas trocas de marcha se o turbo estiver cheio (pressão acumulada >= 0.65)!
     if (state.turboInstalled && state.engineOn && state.turboBoost >= 0.65) {
@@ -4356,6 +4656,42 @@ function setTurboInstalled(enabled) {
   if (mBtn) mBtn.classList.toggle('active', enabled);
 }
 
+function saveAssistSettings() {
+  try {
+    localStorage.setItem('corsa3d_assists', JSON.stringify({ abs: state.absEnabled, tcs: state.tcsEnabled }));
+  } catch (e) {}
+}
+
+function updateAssistButtonsUI() {
+  if (hudDom.absLabel) hudDom.absLabel.textContent = state.absEnabled ? 'ON' : 'OFF';
+  if (hudDom.btnAbs) hudDom.btnAbs.classList.toggle('assist-on', state.absEnabled);
+  if (hudDom.mAbsTxt) hudDom.mAbsTxt.textContent = state.absEnabled ? 'ABS: ON' : 'ABS: OFF';
+  if (hudDom.mBtnAbs) hudDom.mBtnAbs.classList.toggle('active', state.absEnabled);
+  if (hudDom.menuAbsLabel) hudDom.menuAbsLabel.textContent = state.absEnabled ? 'ON' : 'OFF';
+  if (hudDom.menuAbsBtn) hudDom.menuAbsBtn.classList.toggle('is-active', state.absEnabled);
+
+  if (hudDom.tcsLabel) hudDom.tcsLabel.textContent = state.tcsEnabled ? 'ON' : 'OFF';
+  if (hudDom.btnTcs) hudDom.btnTcs.classList.toggle('assist-on', state.tcsEnabled);
+  if (hudDom.mTcsTxt) hudDom.mTcsTxt.textContent = state.tcsEnabled ? 'TCS: ON' : 'TCS: OFF';
+  if (hudDom.mBtnTcs) hudDom.mBtnTcs.classList.toggle('active', state.tcsEnabled);
+  if (hudDom.menuTcsLabel) hudDom.menuTcsLabel.textContent = state.tcsEnabled ? 'ON' : 'OFF';
+  if (hudDom.menuTcsBtn) hudDom.menuTcsBtn.classList.toggle('is-active', state.tcsEnabled);
+}
+
+function toggleABS() {
+  state.absEnabled = !state.absEnabled;
+  if (!state.absEnabled) state.absActive = false;
+  saveAssistSettings();
+  updateAssistButtonsUI();
+}
+
+function toggleTCS() {
+  state.tcsEnabled = !state.tcsEnabled;
+  if (!state.tcsEnabled) state.tcsActive = false;
+  saveAssistSettings();
+  updateAssistButtonsUI();
+}
+
 function cycleCameraMode() {
   state.cameraMode = (state.cameraMode + 1) % 4;
   state.orbitYaw = state.cameraMode === 3 ? Math.PI * 0.35 : 0;
@@ -4431,6 +4767,10 @@ window.addEventListener('keydown', (e) => {
       toggleTransmissionMode();
     } else if (isActionCodeMatch(e, 'turbo')) {
       setTurboInstalled(!state.turboInstalled);
+    } else if (isActionCodeMatch(e, 'absToggle')) {
+      toggleABS();
+    } else if (isActionCodeMatch(e, 'tcsToggle')) {
+      toggleTCS();
     } else if (isActionCodeMatch(e, 'headlights')) {
       toggleHeadlights();
     } else if (isActionCodeMatch(e, 'timeOfDay')) {
@@ -4924,6 +5264,24 @@ function setupGameMenuAndOptions() {
   document.getElementById('menu-trans-btn')?.addEventListener('click', toggleTransmissionMode);
   document.getElementById('menu-lights-btn')?.addEventListener('click', toggleHeadlights);
   document.getElementById('menu-camera-btn')?.addEventListener('click', cycleCameraMode);
+  document.getElementById('menu-abs-btn')?.addEventListener('click', toggleABS);
+  document.getElementById('menu-tcs-btn')?.addEventListener('click', toggleTCS);
+  document.getElementById('btn-abs')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleABS();
+  });
+  document.getElementById('btn-tcs')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleTCS();
+  });
+  document.getElementById('mbtn-abs')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleABS();
+  });
+  document.getElementById('mbtn-tcs')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleTCS();
+  });
 
   // Sliders de Volume
   const sliderMap = [
@@ -4962,6 +5320,7 @@ function setupGameMenuAndOptions() {
 
   applyAudioSettings();
   renderKeybindsUI();
+  updateAssistButtonsUI();
   applyGraphicsQuality(state.graphicsQuality);
   if (envTimeSystem) envTimeSystem.updateHudDom();
 }

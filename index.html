@@ -182,6 +182,8 @@
             <button id="menu-trans-btn" class="quick-chip" type="button">⚙️ Câmbio: <span id="menu-trans-label">MANUAL</span></button>
             <button id="menu-lights-btn" class="quick-chip" type="button">💡 Faróis: <span id="menu-lights-label">OFF</span></button>
             <button id="menu-camera-btn" class="quick-chip" type="button">🎥 Câmera: <span id="menu-camera-label">PERSEGUIÇÃO</span></button>
+            <button id="menu-abs-btn" class="quick-chip" type="button">🛑 ABS: <span id="menu-abs-label">ON</span></button>
+            <button id="menu-tcs-btn" class="quick-chip" type="button">⚡ TCS: <span id="menu-tcs-label">ON</span></button>
           </div>
           <div id="keybinds-list" class="keybinds-list"></div>
           <div class="tab-actions-row">
@@ -279,6 +281,16 @@
         <span id="turbo-label" class="value">OFF</span>
       </button>
 
+      <button id="btn-abs" class="hud-btn hud-btn-compact assist-on" type="button" title="Alternar Freios ABS (B)">
+        <span class="label">ABS</span>
+        <span id="abs-label" class="value">ON</span>
+      </button>
+
+      <button id="btn-tcs" class="hud-btn hud-btn-compact assist-on" type="button" title="Alternar Controle de Tração TCS (K)">
+        <span class="label">TCS</span>
+        <span id="tcs-label" class="value">ON</span>
+      </button>
+
       <button id="btn-options-hud" class="hud-btn options-btn" type="button" title="Abrir Opções / Pausa (ESC)">
         <span class="label">MENU</span>
         <span class="value">⚙️ OPÇÕES</span>
@@ -332,6 +344,12 @@
       <button id="mbtn-turbo" class="m-action-btn" type="button" title="Ativar / Desativar Turbo">
         <span class="m-icon">🐌</span>
         <span id="m-turbo-txt" class="m-txt">TURBO: OFF</span>
+      </button>
+      <button id="mbtn-abs" class="m-action-btn active" type="button" title="Alternar ABS">
+        <span id="m-abs-txt" class="m-txt">ABS: ON</span>
+      </button>
+      <button id="mbtn-tcs" class="m-action-btn active" type="button" title="Alternar Controle de Tração">
+        <span id="m-tcs-txt" class="m-txt">TCS: ON</span>
       </button>
       <button id="mbtn-tod" class="m-action-btn" type="button" title="Alternar Dia / Noite">
         <span class="m-icon">☀️</span>
