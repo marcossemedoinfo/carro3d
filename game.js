@@ -118,6 +118,7 @@ const GRAPHICS_PRESETS = {
     clearcoat: false,
     realtimeCube: false,
     maxSmokeParticles: 35,
+    maxSkidSegments: 280,
     cameraFar: 320,
     fogMult: 1.85
   },
@@ -134,6 +135,7 @@ const GRAPHICS_PRESETS = {
     clearcoat: false,
     realtimeCube: false,
     maxSmokeParticles: 160,
+    maxSkidSegments: 640,
     cameraFar: 620,
     fogMult: 1.05
   },
@@ -150,6 +152,7 @@ const GRAPHICS_PRESETS = {
     clearcoat: true,
     realtimeCube: false,
     maxSmokeParticles: 260,
+    maxSkidSegments: 1050,
     cameraFar: 850,
     fogMult: 1.0
   },
@@ -166,6 +169,7 @@ const GRAPHICS_PRESETS = {
     clearcoat: true,
     realtimeCube: true,
     maxSmokeParticles: 320,
+    maxSkidSegments: 1400,
     cameraFar: 1000,
     fogMult: 0.90
   }
@@ -689,68 +693,170 @@ class SpatialCarAudio {
 }
 
 // ============================================================================
-// 4. SISTEMA DE PARTÍCULAS 3D (FUMAÇA DE PNEU EM ARRANCADA/FREIO/DRIFT E ESCAPAMENTO)
+// 4. SISTEMA DE PARTÍCULAS 3D EM LOTE (FUMAÇA VOLUMÉTRICA PROCEDURAL & MARCAS DE PNEU)
 // ============================================================================
+function createProceduralSmokeAtlasTexture() {
+  const size = 256;
+  const half = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(size, size);
+  const data = imgData.data;
+
+  const hash2 = (ix, iy, seed) => {
+    const h = Math.sin(ix * 127.1 + iy * 311.7 + seed * 74.7) * 43758.5453123;
+    return h - Math.floor(h);
+  };
+
+  const smoothNoise = (x, y, seed) => {
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uy = fy * fy * (3 - 2 * fy);
+    const a = hash2(ix, iy, seed);
+    const b = hash2(ix + 1, iy, seed);
+    const c = hash2(ix, iy + 1, seed);
+    const d = hash2(ix + 1, iy + 1, seed);
+    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+  };
+
+  const fbm = (x, y, seed) => {
+    let v = 0;
+    v += smoothNoise(x, y, seed) * 0.55;
+    v += smoothNoise(x * 2.15 + 7.3, y * 2.15 + 3.1, seed + 11) * 0.30;
+    v += smoothNoise(x * 4.4 + 19.7, y * 4.4 + 13.4, seed + 29) * 0.15;
+    return v;
+  };
+
+  for (let q = 0; q < 4; q++) {
+    const qx = (q % 2) * half;
+    const qy = Math.floor(q / 2) * half;
+    const seed = 13.7 + q * 31.3;
+
+    for (let py = 0; py < half; py++) {
+      for (let px = 0; px < half; px++) {
+        const nx = (px - 63.5) / 54.0;
+        const ny = (py - 63.5) / 54.0;
+        const r2 = nx * nx + ny * ny;
+        if (r2 >= 1.0) continue;
+
+        // Distorção orgânica dos lóbulos da nuvem com ruído FBM multi-oitava
+        const warp = fbm(nx * 2.4 + 4.0, ny * 2.4 + 4.0, seed);
+        const rWarped = Math.sqrt(r2) - (warp - 0.5) * 0.34;
+        const radialMask = Math.max(0, 1.0 - rWarped * rWarped);
+        const softMask = Math.pow(radialMask, 1.9);
+
+        const detail = fbm(nx * 3.8 + warp * 1.4, ny * 3.8 - warp * 1.1, seed + 53);
+        const alpha = Math.min(1.0, softMask * (0.45 + 0.85 * detail));
+        const highlight = Math.min(255, Math.round(226 + detail * 28));
+
+        const idx = ((qy + py) * size + (qx + px)) * 4;
+        data[idx] = highlight;
+        data[idx + 1] = highlight;
+        data[idx + 2] = Math.min(255, highlight + 4);
+        data[idx + 3] = Math.round(alpha * 228);
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 class SmokeParticleSystem {
-  constructor(scene, maxParticles = 320) {
+  constructor(scene, maxParticles = 360) {
     this.maxParticles = maxParticles;
     this.activeLimit = maxParticles;
     this.pool = [];
     this.index = 0;
 
-    const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createRadialGradient(64, 64, 6, 64, 64, 60);
-    grad.addColorStop(0.0, 'rgba(235, 240, 245, 0.85)');
-    grad.addColorStop(0.45, 'rgba(200, 208, 218, 0.45)');
-    grad.addColorStop(1.0, 'rgba(160, 170, 180, 0.0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 128, 128);
-    const texture = new THREE.CanvasTexture(canvas);
-
-    this.geometry = new THREE.PlaneGeometry(1, 1);
+    const texture = createProceduralSmokeAtlasTexture();
+    const vertCount = maxParticles * 4;
+    this.positions = new Float32Array(vertCount * 3);
+    this.uvs = new Float32Array(vertCount * 2);
+    this.colors = new Float32Array(vertCount * 4);
+    const indices = new Uint16Array(maxParticles * 6);
 
     for (let i = 0; i < maxParticles; i++) {
-      const mat = new THREE.MeshBasicMaterial({
-        map: texture,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        side: THREE.DoubleSide
-      });
-      const mesh = new THREE.Mesh(this.geometry, mat);
-      mesh.visible = false;
-      scene.add(mesh);
+      const vb = i * 4;
+      const ib = i * 6;
+      indices[ib] = vb;
+      indices[ib + 1] = vb + 1;
+      indices[ib + 2] = vb + 2;
+      indices[ib + 3] = vb;
+      indices[ib + 4] = vb + 2;
+      indices[ib + 5] = vb + 3;
 
       this.pool.push({
-        mesh,
-        mat,
         active: false,
         age: 0,
         maxAge: 1.0,
+        pos: new THREE.Vector3(),
         vel: new THREE.Vector3(),
         startScale: 0.2,
         endScale: 1.5,
         startOpacity: 0.4,
+        buoyancy: 0.55,
+        drag: 0.42,
         rotSpeed: 0,
-        rotZ: 0
+        rotZ: 0,
+        curlPhase: Math.random() * Math.PI * 2,
+        baseColor: new THREE.Color(0xe2e8f0)
       });
     }
+
+    this.geometry = new THREE.BufferGeometry();
+    this.posAttr = new THREE.BufferAttribute(this.positions, 3);
+    this.posAttr.setUsage(THREE.DynamicDrawUsage);
+    this.uvAttr = new THREE.BufferAttribute(this.uvs, 2);
+    this.uvAttr.setUsage(THREE.DynamicDrawUsage);
+    this.colorAttr = new THREE.BufferAttribute(this.colors, 4);
+    this.colorAttr.setUsage(THREE.DynamicDrawUsage);
+
+    this.geometry.setAttribute('position', this.posAttr);
+    this.geometry.setAttribute('uv', this.uvAttr);
+    this.geometry.setAttribute('color', this.colorAttr);
+    this.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    this.geometry.setDrawRange(0, 0);
+
+    this.material = new THREE.MeshBasicMaterial({
+      map: texture,
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      fog: true,
+      side: THREE.DoubleSide
+    });
+
+    // Um único Mesh em lote reduz centenas de draw calls de partículas para 1!
+    this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 4;
+    scene.add(this.mesh);
+
+    this._camRight = new THREE.Vector3();
+    this._camUp = new THREE.Vector3();
+    this._envTint = new THREE.Color(1, 1, 1);
   }
 
   setActiveLimit(limit) {
     this.activeLimit = Math.max(10, Math.min(this.maxParticles, limit));
     for (let i = this.activeLimit; i < this.maxParticles; i++) {
       this.pool[i].active = false;
-      this.pool[i].mesh.visible = false;
     }
     this.index = this.index % this.activeLimit;
   }
 
   spawn(pos, vel, opts = {}) {
     const p = this.pool[this.index];
+    const slot = this.index;
     this.index = (this.index + 1) % this.activeLimit;
 
     p.active = true;
@@ -759,43 +865,372 @@ class SmokeParticleSystem {
     p.startScale = opts.startScale ?? 0.22;
     p.endScale = opts.endScale ?? 1.85;
     p.startOpacity = opts.opacity ?? 0.42;
+    p.buoyancy = opts.buoyancy ?? 0.58;
+    p.drag = opts.drag ?? 0.40;
     p.rotZ = Math.random() * Math.PI * 2;
-    p.rotSpeed = (Math.random() - 0.5) * 2.4;
+    p.rotSpeed = (Math.random() - 0.5) * 2.1;
+    p.curlPhase = Math.random() * Math.PI * 2;
 
-    p.mat.color.setHex(opts.colorHex ?? 0xe2e8f0);
-    p.mesh.position.copy(pos);
+    p.baseColor.setHex(opts.colorHex ?? 0xe2e8f0);
+    p.pos.copy(pos);
     p.vel.copy(vel);
-    p.mesh.visible = true;
+
+    // Seleciona um dos 4 formatos orgânicos do atlas 2x2 com margem interna anti-sangria
+    const q = Math.floor(Math.random() * 4);
+    const col = q % 2;
+    const row = Math.floor(q / 2);
+    const pad = 0.012;
+    const u0 = col * 0.5 + pad;
+    const u1 = (col + 1) * 0.5 - pad;
+    const v0 = 1.0 - (row + 1) * 0.5 + pad;
+    const v1 = 1.0 - row * 0.5 - pad;
+
+    const uvBase = slot * 8;
+    this.uvs[uvBase] = u0; this.uvs[uvBase + 1] = v0;
+    this.uvs[uvBase + 2] = u1; this.uvs[uvBase + 3] = v0;
+    this.uvs[uvBase + 4] = u1; this.uvs[uvBase + 5] = v1;
+    this.uvs[uvBase + 6] = u0; this.uvs[uvBase + 7] = v1;
+    this.uvAttr.needsUpdate = true;
   }
 
   update(dt, camera) {
-    for (let i = 0; i < this.maxParticles; i++) {
+    this._camRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    this._camUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+
+    // Tonaliza a fumaça de acordo com a iluminação do ambiente (dia claro, pôr do sol quente, noite discreta)
+    const sunLum = typeof sunLight !== 'undefined' ? sunLight.intensity : 1.0;
+    const hemiLum = typeof hemiLight !== 'undefined' ? hemiLight.intensity : 0.7;
+    const envLevel = THREE.MathUtils.clamp(0.32 + sunLum * 0.28 + hemiLum * 0.25, 0.34, 1.0);
+    const isSunsetTint = typeof sunLight !== 'undefined' && sunLight.color.r > sunLight.color.b * 1.25 && sunLum > 0.2;
+    this._envTint.setRGB(
+      envLevel * (isSunsetTint ? 1.05 : 1.0),
+      envLevel * (isSunsetTint ? 0.92 : 1.0),
+      envLevel * (isSunsetTint ? 0.84 : 1.0)
+    );
+
+    const rx = this._camRight.x;
+    const ry = this._camRight.y;
+    const rz = this._camRight.z;
+    const ux = this._camUp.x;
+    const uy = this._camUp.y;
+    const uz = this._camUp.z;
+
+    let anyActive = false;
+    let maxWrittenSlot = -1;
+
+    for (let i = 0; i < this.activeLimit; i++) {
       const p = this.pool[i];
-      if (!p.active) continue;
+      const vBase = i * 12;
+      const cBase = i * 16;
+
+      if (!p.active) {
+        this.colors[cBase + 3] = 0;
+        this.colors[cBase + 7] = 0;
+        this.colors[cBase + 11] = 0;
+        this.colors[cBase + 15] = 0;
+        continue;
+      }
 
       p.age += dt;
       if (p.age >= p.maxAge) {
         p.active = false;
-        p.mesh.visible = false;
+        this.colors[cBase + 3] = 0;
+        this.colors[cBase + 7] = 0;
+        this.colors[cBase + 11] = 0;
+        this.colors[cBase + 15] = 0;
         continue;
       }
 
+      anyActive = true;
+      maxWrittenSlot = i;
+
       const t = p.age / p.maxAge;
-      p.mesh.position.addScaledVector(p.vel, dt);
-      p.vel.multiplyScalar(Math.pow(0.42, dt));
-      p.vel.y += 0.55 * dt;
+      const curl = Math.sin(p.age * 3.4 + p.curlPhase) * 0.35 * dt;
+      p.pos.x += p.vel.x * dt + curl * rx;
+      p.pos.y += p.vel.y * dt;
+      p.pos.z += p.vel.z * dt + curl * rz;
 
-      const scale = THREE.MathUtils.lerp(p.startScale, p.endScale, Math.pow(t, 0.65));
-      p.mesh.scale.set(scale, scale, scale);
+      const dragMul = Math.pow(p.drag, dt);
+      p.vel.x *= dragMul;
+      p.vel.y = p.vel.y * dragMul + p.buoyancy * dt;
+      p.vel.z *= dragMul;
 
-      const fadeIn = Math.min(t * 5.0, 1.0);
-      const fadeOut = 1.0 - Math.pow(t, 1.4);
-      p.mat.opacity = p.startOpacity * fadeIn * fadeOut;
+      const halfScale = THREE.MathUtils.lerp(p.startScale, p.endScale, Math.pow(t, 0.56)) * 0.5;
+      const fadeIn = Math.min(t * 6.0, 1.0);
+      const fadeOut = Math.pow(1.0 - t, 1.65);
+      const alpha = p.startOpacity * fadeIn * fadeOut;
 
-      p.mesh.quaternion.copy(camera.quaternion);
       p.rotZ += p.rotSpeed * dt;
-      p.mesh.rotateZ(p.rotZ);
+      const c = Math.cos(p.rotZ) * halfScale;
+      const s = Math.sin(p.rotZ) * halfScale;
+
+      const ax = rx * c + ux * s;
+      const ay = ry * c + uy * s;
+      const az = rz * c + uz * s;
+
+      const bx = ux * c - rx * s;
+      const by = uy * c - ry * s;
+      const bz = uz * c - rz * s;
+
+      const px = p.pos.x;
+      const py = p.pos.y;
+      const pz = p.pos.z;
+
+      // Vértices do quad rotacionado em câmera (BL, BR, TR, TL)
+      this.positions[vBase]     = px - ax - bx; this.positions[vBase + 1]  = py - ay - by; this.positions[vBase + 2]  = pz - az - bz;
+      this.positions[vBase + 3] = px + ax - bx; this.positions[vBase + 4]  = py + ay - by; this.positions[vBase + 5]  = pz + az - bz;
+      this.positions[vBase + 6] = px + ax + bx; this.positions[vBase + 7]  = py + ay + by; this.positions[vBase + 8]  = pz + az + bz;
+      this.positions[vBase + 9] = px - ax + bx; this.positions[vBase + 10] = py - ay + by; this.positions[vBase + 11] = pz - az + bz;
+
+      const cr = p.baseColor.r * this._envTint.r;
+      const cg = p.baseColor.g * this._envTint.g;
+      const cb = p.baseColor.b * this._envTint.b;
+
+      for (let k = 0; k < 4; k++) {
+        const ci = cBase + k * 4;
+        this.colors[ci] = cr;
+        this.colors[ci + 1] = cg;
+        this.colors[ci + 2] = cb;
+        this.colors[ci + 3] = alpha;
+      }
     }
+
+    if (anyActive) {
+      this.geometry.setDrawRange(0, (maxWrittenSlot + 1) * 6);
+      this.posAttr.needsUpdate = true;
+      this.colorAttr.needsUpdate = true;
+    } else if (this.geometry.drawRange.count !== 0) {
+      this.geometry.setDrawRange(0, 0);
+    }
+  }
+}
+
+function createProceduralTireTreadTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(64, 64);
+  const data = imgData.data;
+
+  for (let y = 0; y < 64; y++) {
+    for (let x = 0; x < 64; x++) {
+      const u = x / 63.0;
+      const edgeFade = Math.sin(u * Math.PI);
+      const softEdge = Math.pow(edgeFade, 0.55);
+
+      // Sulcos longitudinais discretos de banda de rodagem
+      const inGroove =
+        (u > 0.24 && u < 0.29) ||
+        (u > 0.47 && u < 0.53) ||
+        (u > 0.71 && u < 0.76);
+      const grooveMul = inGroove ? 0.38 : 1.0;
+
+      const grain = 0.85 + 0.15 * Math.sin(x * 13.7 + y * 5.3);
+      const alpha = THREE.MathUtils.clamp(softEdge * grooveMul * grain, 0, 1);
+
+      const idx = (y * 64 + x) * 4;
+      data[idx] = 22;
+      data[idx + 1] = 24;
+      data[idx + 2] = 28;
+      data[idx + 3] = Math.round(alpha * 235);
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+class TireSkidMarkSystem {
+  constructor(scene, maxSegments = 1400) {
+    this.maxSegments = maxSegments;
+    this.activeLimit = maxSegments;
+    this.cursor = 0;
+    this.count = 0;
+
+    const vertCount = maxSegments * 4;
+    this.positions = new Float32Array(vertCount * 3);
+    this.uvs = new Float32Array(vertCount * 2);
+    this.colors = new Float32Array(vertCount * 4);
+    const indices = new Uint16Array(maxSegments * 6);
+
+    for (let i = 0; i < maxSegments; i++) {
+      const vb = i * 4;
+      const ib = i * 6;
+      indices[ib] = vb;
+      indices[ib + 1] = vb + 1;
+      indices[ib + 2] = vb + 2;
+      indices[ib + 3] = vb;
+      indices[ib + 4] = vb + 2;
+      indices[ib + 5] = vb + 3;
+    }
+
+    this.geometry = new THREE.BufferGeometry();
+    this.posAttr = new THREE.BufferAttribute(this.positions, 3);
+    this.posAttr.setUsage(THREE.DynamicDrawUsage);
+    this.uvAttr = new THREE.BufferAttribute(this.uvs, 2);
+    this.uvAttr.setUsage(THREE.DynamicDrawUsage);
+    this.colorAttr = new THREE.BufferAttribute(this.colors, 4);
+    this.colorAttr.setUsage(THREE.DynamicDrawUsage);
+
+    this.geometry.setAttribute('position', this.posAttr);
+    this.geometry.setAttribute('uv', this.uvAttr);
+    this.geometry.setAttribute('color', this.colorAttr);
+    this.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    this.geometry.setDrawRange(0, 0);
+
+    this.material = new THREE.MeshBasicMaterial({
+      map: createProceduralTireTreadTexture(),
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      side: THREE.DoubleSide
+    });
+
+    this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 2;
+    scene.add(this.mesh);
+
+    this.wheels = Array.from({ length: 4 }, () => ({
+      hasPrev: false,
+      prevPos: new THREE.Vector3(),
+      prevLeft: new THREE.Vector3(),
+      prevRight: new THREE.Vector3(),
+      prevAlpha: 0,
+      uvV: 0
+    }));
+    this._curPos = new THREE.Vector3();
+    this._curLeft = new THREE.Vector3();
+    this._curRight = new THREE.Vector3();
+    this._dirty = false;
+  }
+
+  setActiveLimit(limit) {
+    const nextLimit = Math.max(60, Math.min(this.maxSegments, limit));
+    if (nextLimit < this.count) {
+      this.clearAll();
+    }
+    this.activeLimit = nextLimit;
+    this.cursor = this.cursor % this.activeLimit;
+  }
+
+  resetWheelLinks() {
+    for (let i = 0; i < 4; i++) {
+      this.wheels[i].hasPrev = false;
+    }
+  }
+
+  clearAll() {
+    this.cursor = 0;
+    this.count = 0;
+    this.colors.fill(0);
+    this.geometry.setDrawRange(0, 0);
+    this.colorAttr.needsUpdate = true;
+    this.resetWheelLinks();
+  }
+
+  _writeSegment(w, curLeft, curRight, curAlpha, segDist) {
+    const seg = this.cursor;
+    this.cursor = (this.cursor + 1) % this.activeLimit;
+    if (this.count < this.activeLimit) this.count++;
+
+    const vBase = seg * 12;
+    const uvBase = seg * 8;
+    const cBase = seg * 16;
+
+    const nextUvV = w.uvV + segDist * 1.4;
+
+    // Quad contínuo no asfalto: [prevLeft, prevRight, curRight, curLeft]
+    this.positions[vBase]     = w.prevLeft.x;  this.positions[vBase + 1]  = w.prevLeft.y;  this.positions[vBase + 2]  = w.prevLeft.z;
+    this.positions[vBase + 3] = w.prevRight.x; this.positions[vBase + 4]  = w.prevRight.y; this.positions[vBase + 5]  = w.prevRight.z;
+    this.positions[vBase + 6] = curRight.x;    this.positions[vBase + 7]  = curRight.y;    this.positions[vBase + 8]  = curRight.z;
+    this.positions[vBase + 9] = curLeft.x;     this.positions[vBase + 10] = curLeft.y;     this.positions[vBase + 11] = curLeft.z;
+
+    this.uvs[uvBase]     = 0; this.uvs[uvBase + 1] = w.uvV;
+    this.uvs[uvBase + 2] = 1; this.uvs[uvBase + 3] = w.uvV;
+    this.uvs[uvBase + 4] = 1; this.uvs[uvBase + 5] = nextUvV;
+    this.uvs[uvBase + 6] = 0; this.uvs[uvBase + 7] = nextUvV;
+
+    // Cores RGBA suaves para transição sem emendas
+    this.colors[cBase]      = 0.10; this.colors[cBase + 1]  = 0.10; this.colors[cBase + 2]  = 0.11; this.colors[cBase + 3]  = w.prevAlpha;
+    this.colors[cBase + 4]  = 0.10; this.colors[cBase + 5]  = 0.10; this.colors[cBase + 6]  = 0.11; this.colors[cBase + 7]  = w.prevAlpha;
+    this.colors[cBase + 8]  = 0.10; this.colors[cBase + 9]  = 0.10; this.colors[cBase + 10] = 0.11; this.colors[cBase + 11] = curAlpha;
+    this.colors[cBase + 12] = 0.10; this.colors[cBase + 13] = 0.10; this.colors[cBase + 14] = 0.11; this.colors[cBase + 15] = curAlpha;
+
+    w.uvV = nextUvV;
+    w.prevAlpha = curAlpha;
+    this._dirty = true;
+  }
+
+  recordWheel(wheelIdx, hitPoint, hitNormal, rightDir, skidStrength) {
+    const w = this.wheels[wheelIdx];
+    const isSkidding = skidStrength > 0.22;
+
+    if (!isSkidding) {
+      if (w.hasPrev && w.prevAlpha > 0.04 && hitPoint) {
+        this._curPos.copy(hitPoint).addScaledVector(hitNormal, 0.017);
+        const dist = this._curPos.distanceTo(w.prevPos);
+        if (dist >= 0.14 && dist < 2.2) {
+          const halfW = 0.095 * CAR_SCALE;
+          this._curLeft.copy(this._curPos).addScaledVector(rightDir, -halfW);
+          this._curRight.copy(this._curPos).addScaledVector(rightDir, halfW);
+          this._writeSegment(w, this._curLeft, this._curRight, 0.0, dist);
+        }
+      }
+      w.hasPrev = false;
+      return;
+    }
+
+    this._curPos.copy(hitPoint).addScaledVector(hitNormal, 0.017);
+    const halfW = 0.095 * CAR_SCALE;
+    this._curLeft.copy(this._curPos).addScaledVector(rightDir, -halfW);
+    this._curRight.copy(this._curPos).addScaledVector(rightDir, halfW);
+    const targetAlpha = THREE.MathUtils.clamp((skidStrength - 0.15) * 0.85, 0.12, 0.78);
+
+    if (!w.hasPrev) {
+      w.hasPrev = true;
+      w.prevPos.copy(this._curPos);
+      w.prevLeft.copy(this._curLeft);
+      w.prevRight.copy(this._curRight);
+      w.prevAlpha = 0.05;
+      w.uvV = 0;
+      return;
+    }
+
+    const dist = this._curPos.distanceTo(w.prevPos);
+    if (dist > 2.4) {
+      // Quebra continuidade em saltos longos ou teleporte/reset
+      w.prevPos.copy(this._curPos);
+      w.prevLeft.copy(this._curLeft);
+      w.prevRight.copy(this._curRight);
+      w.prevAlpha = 0.05;
+      return;
+    }
+
+    if (dist < 0.20) return;
+
+    this._writeSegment(w, this._curLeft, this._curRight, targetAlpha, dist);
+    w.prevPos.copy(this._curPos);
+    w.prevLeft.copy(this._curLeft);
+    w.prevRight.copy(this._curRight);
+  }
+
+  commitUpdates() {
+    if (!this._dirty) return;
+    this._dirty = false;
+    this.geometry.setDrawRange(0, this.count * 6);
+    this.posAttr.needsUpdate = true;
+    this.uvAttr.needsUpdate = true;
+    this.colorAttr.needsUpdate = true;
   }
 }
 
@@ -2548,8 +2983,9 @@ function applyGraphicsQuality(qualityKey) {
   camera.far = preset.cameraFar;
   camera.updateProjectionMatrix();
 
-  // 4. Partículas de fumaça
+  // 4. Partículas de fumaça e marcas de pneu no asfalto
   smokeSystem.setActiveLimit(preset.maxSmokeParticles);
+  skidMarkSystem.setActiveLimit(preset.maxSkidSegments);
 
   // 5. Materiais do Corsa (Clearcoat & Intensidade de Reflexo)
   const paintEnvInt = preset.reflections === 'off' ? 0.0 : preset.reflections === 'sky' ? 1.15 : preset.key === 'ultra' ? 2.1 : 1.9;
@@ -2643,7 +3079,8 @@ world.addContactMaterial(
   })
 );
 
-const smokeSystem = new SmokeParticleSystem(scene, 320);
+const smokeSystem = new SmokeParticleSystem(scene, 360);
+const skidMarkSystem = new TireSkidMarkSystem(scene, 1400);
 const carAudio = new SpatialCarAudio(camera);
 
 let vehicle = null;
@@ -2651,12 +3088,14 @@ let chassisBody = null;
 let corsaChassisVisual = null;
 let corsaWheelVisuals = [];
 
-// Luzes funcionais 3D do Corsa (Faróis Halógenos Branco-Quente, Luz de Freio Suave e Luz de Ré)
+// Luzes funcionais 3D do Corsa (Faróis Halógenos, Lanternas/Freio Esquerda/Direita e Luzes de Ré Direcionais)
 // Importante: mantemos .visible = false quando apagadas para que o shader PBR da GPU não avalie luzes de intensidade zero!
 let headlightSpotL = null;
 let headlightSpotR = null;
-let brakeLightPoint = null;
-let reverseLightPoint = null;
+let brakeLightPointL = null;
+let brakeLightPointR = null;
+let reverseSpotL = null;
+let reverseSpotR = null;
 
 const wheelSpinAngles = [0, 0, 0, 0];
 
@@ -2685,15 +3124,29 @@ function setupCarLights(chassisGroup) {
   headlightSpotR.visible = false;
   chassisGroup.add(headlightSpotR, headlightSpotR.target);
 
-  brakeLightPoint = new THREE.PointLight(0xff2222, 0, 2.8);
-  brakeLightPoint.position.set(0.0, 0.22 * CAR_SCALE, 1.78 * CAR_SCALE);
-  brakeLightPoint.visible = false;
-  chassisGroup.add(brakeLightPoint);
+  // Luzes de lanterna/freio posicionadas exatamente nos blocos esquerdo e direito (longe da placa central!)
+  brakeLightPointL = new THREE.PointLight(0xff2222, 0, 2.6, 2.0);
+  brakeLightPointL.position.set(-0.64 * CAR_SCALE, 0.21 * CAR_SCALE, 1.86 * CAR_SCALE);
+  brakeLightPointL.visible = false;
+  chassisGroup.add(brakeLightPointL);
 
-  reverseLightPoint = new THREE.PointLight(0xfff3c4, 0, 2.6);
-  reverseLightPoint.position.set(0.0, 0.19 * CAR_SCALE, 1.79 * CAR_SCALE);
-  reverseLightPoint.visible = false;
-  chassisGroup.add(reverseLightPoint);
+  brakeLightPointR = new THREE.PointLight(0xff2222, 0, 2.6, 2.0);
+  brakeLightPointR.position.set(0.64 * CAR_SCALE, 0.21 * CAR_SCALE, 1.86 * CAR_SCALE);
+  brakeLightPointR.visible = false;
+  chassisGroup.add(brakeLightPointR);
+
+  // Faróis de ré em SpotLight saindo de cada lanterna traseira e projetando cone para trás/chão sem iluminar a placa
+  reverseSpotL = new THREE.SpotLight(0xfff6d6, 0, 12.0, Math.PI * 0.26, 0.65, 1.6);
+  reverseSpotL.position.set(-0.62 * CAR_SCALE, 0.20 * CAR_SCALE, 1.77 * CAR_SCALE);
+  reverseSpotL.target.position.set(-0.75 * CAR_SCALE, -0.45 * CAR_SCALE, 7.5 * CAR_SCALE);
+  reverseSpotL.visible = false;
+  chassisGroup.add(reverseSpotL, reverseSpotL.target);
+
+  reverseSpotR = new THREE.SpotLight(0xfff6d6, 0, 12.0, Math.PI * 0.26, 0.65, 1.6);
+  reverseSpotR.position.set(0.62 * CAR_SCALE, 0.20 * CAR_SCALE, 1.77 * CAR_SCALE);
+  reverseSpotR.target.position.set(0.75 * CAR_SCALE, -0.45 * CAR_SCALE, 7.5 * CAR_SCALE);
+  reverseSpotR.visible = false;
+  chassisGroup.add(reverseSpotR, reverseSpotR.target);
 }
 
 async function initSimulation() {
@@ -2913,6 +3366,7 @@ function resetCarToSpawn(spawnIndex = state.spawnIdx) {
   state.shiftCooldown = 0;
   state.cuttingRev = false;
   for (let i = 0; i < 4; i++) state.wheelSkids[i] = 0;
+  skidMarkSystem.resetWheelLinks();
 
   const backX = Math.sin(sp.yaw) * 4.2;
   const backZ = Math.cos(sp.yaw) * 4.2;
@@ -2935,6 +3389,10 @@ const tempChassisQuat = new THREE.Quaternion();
 const tempVelVec = new THREE.Vector3();
 const tempSmokeVel = new THREE.Vector3();
 const tempExhaustVel = new THREE.Vector3();
+const tempSkidHit = new THREE.Vector3();
+const tempSkidNormal = new THREE.Vector3();
+const tempSkidRight = new THREE.Vector3();
+const tempSkidQuat = new THREE.Quaternion();
 
 function getGearMaxSpeedKmh(gear) {
   const table = state.turboInstalled ? CORSA_SPECS.gearMaxSpeedKmhTurbo : CORSA_SPECS.gearMaxSpeedKmh;
@@ -3273,20 +3731,25 @@ function updateVehiclePhysicsAndEffects(dt) {
   if (brakeLightMat) {
     brakeLightMat.emissiveIntensity = isBrakingNow ? 1.45 : state.headlightsOn ? 0.32 : 0.0;
   }
-  if (brakeLightPoint) {
-    const brakePointIntensity = isBrakingNow ? 1.65 : state.headlightsOn ? 0.35 : 0.0;
-    brakeLightPoint.intensity = brakePointIntensity;
-    brakeLightPoint.visible = brakePointIntensity > 0.01;
+  if (brakeLightPointL && brakeLightPointR) {
+    const brakePointIntensity = isBrakingNow ? 1.25 : state.headlightsOn ? 0.28 : 0.0;
+    const brakeVis = brakePointIntensity > 0.01;
+    brakeLightPointL.intensity = brakePointIntensity;
+    brakeLightPointR.intensity = brakePointIntensity;
+    brakeLightPointL.visible = brakeVis;
+    brakeLightPointR.visible = brakeVis;
   }
 
   const isReverseEngaged = state.gear === -1;
   if (reverseLightMat) {
     reverseLightMat.emissiveIntensity = isReverseEngaged ? 1.25 : 0.0;
   }
-  if (reverseLightPoint) {
-    const revIntensity = isReverseEngaged ? 1.35 : 0.0;
-    reverseLightPoint.intensity = revIntensity;
-    reverseLightPoint.visible = isReverseEngaged;
+  if (reverseSpotL && reverseSpotR) {
+    const revIntensity = isReverseEngaged ? 2.4 : 0.0;
+    reverseSpotL.intensity = revIntensity;
+    reverseSpotR.intensity = revIntensity;
+    reverseSpotL.visible = isReverseEngaged;
+    reverseSpotR.visible = isReverseEngaged;
   }
 
   // Velocidade angular real de cada uma das 4 rodas
@@ -3309,7 +3772,7 @@ function updateVehiclePhysicsAndEffects(dt) {
     wheelSpinAngles[i] -= wOmega * dt;
   }
 
-  const isHardBrakingHighSpeed = state.brakeInput > 0.75 && state.speedKmh > 35;
+  const isHardBrakingHighSpeed = state.brakeInput > 0.78 && state.speedKmh > 18;
   const isCorneringHard = horizSpeedMs > 5.0 && absSlipDeg > 11.5 && !isHandbraking;
   const lateralCornerSkid = isCorneringHard
     ? THREE.MathUtils.clamp((absSlipDeg - 11.5) / 22.0, 0.15, 0.88)
@@ -3341,10 +3804,12 @@ function updateVehiclePhysicsAndEffects(dt) {
         wSkid = Math.max(wSkid, 0.96);
       }
       if (isHardBrakingHighSpeed) {
-        wSkid = Math.max(wSkid, THREE.MathUtils.clamp((state.speedKmh - 28) / 60, 0.50, 1.0));
+        // Travamento progressivo sob frenagem forte (mais intenso na dianteira 63%)
+        const brakeSkid = THREE.MathUtils.clamp((state.speedKmh - 14) / 48, 0.34, 0.95);
+        wSkid = Math.max(wSkid, i < 2 ? brakeSkid : brakeSkid * 0.72);
       }
-      if (i >= 2 && isHandbraking && state.speedKmh > 8) {
-        wSkid = Math.max(wSkid, 0.85);
+      if (i >= 2 && isHandbraking && state.speedKmh > 3.5) {
+        wSkid = Math.max(wSkid, THREE.MathUtils.clamp((state.speedKmh - 2) / 14, 0.45, 0.90));
       }
       if (lateralCornerSkid > 0) {
         // Pneus carregados cantam progressivamente ao entrar forte nas curvas
@@ -3355,27 +3820,57 @@ function updateVehiclePhysicsAndEffects(dt) {
     state.wheelSkids[i] = wSkid;
     maxSkid = Math.max(maxSkid, wSkid);
 
-    if (wSkid > 0.30 && Math.random() < wSkid * 0.92) {
+    // Registra fitas contínuas de marca de pneu no ponto exato de contato com o asfalto
+    const rr = wi.raycastResult;
+    if (wi.isInContact && rr && rr.hasHit) {
+      tempSkidHit.set(rr.hitPointWorld.x, rr.hitPointWorld.y, rr.hitPointWorld.z);
+      tempSkidNormal.set(rr.hitNormalWorld.x, rr.hitNormalWorld.y, rr.hitNormalWorld.z).normalize();
+      tempSkidQuat.set(
+        wi.worldTransform.quaternion.x,
+        wi.worldTransform.quaternion.y,
+        wi.worldTransform.quaternion.z,
+        wi.worldTransform.quaternion.w
+      );
+      tempSkidRight.set(1, 0, 0).applyQuaternion(tempSkidQuat);
+      tempSkidRight.addScaledVector(tempSkidNormal, -tempSkidRight.dot(tempSkidNormal));
+      if (tempSkidRight.lengthSq() > 1e-4) {
+        tempSkidRight.normalize();
+      } else {
+        tempSkidRight.copy(tempChassisRight);
+      }
+      skidMarkSystem.recordWheel(i, tempSkidHit, tempSkidNormal, tempSkidRight, wSkid);
+    } else {
+      skidMarkSystem.recordWheel(i, null, tempSkidNormal, tempChassisRight, 0);
+    }
+
+    if (wSkid > 0.28 && Math.random() < wSkid * 0.96) {
       const wTransform = wi.worldTransform;
-      tempWheelPos.set(
-        wTransform.position.x + (Math.random() - 0.5) * 0.12,
-        wTransform.position.y - CORSA_SPECS.wheelRadius + 0.05,
-        wTransform.position.z + (Math.random() - 0.5) * 0.12
-      );
-      tempSmokeVel.set(
-        -chassisBody.velocity.x * 0.22 + (Math.random() - 0.5) * 0.8,
-        0.35 + Math.random() * 0.40,
-        -chassisBody.velocity.z * 0.22 + (Math.random() - 0.5) * 0.8
-      );
-      smokeSystem.spawn(tempWheelPos, tempSmokeVel, {
-        startScale: 0.22,
-        endScale: 1.55 + wSkid * 0.65,
-        opacity: 0.38 * wSkid,
-        maxAge: 0.95 + Math.random() * 0.60,
-        colorHex: 0xdfe6ed
-      });
+      const puffCount = wSkid > 0.72 && state.graphicsQuality !== 'low' ? 2 : 1;
+      for (let p = 0; p < puffCount; p++) {
+        tempWheelPos.set(
+          wTransform.position.x + (Math.random() - 0.5) * 0.16,
+          wTransform.position.y - CORSA_SPECS.wheelRadius + 0.06,
+          wTransform.position.z + (Math.random() - 0.5) * 0.16
+        );
+        const lateralOut = (i % 2 === 0 ? -1 : 1) * (0.35 + Math.random() * 0.45) * wSkid;
+        tempSmokeVel.set(
+          -chassisBody.velocity.x * 0.24 + tempChassisRight.x * lateralOut + (Math.random() - 0.5) * 0.95,
+          0.42 + Math.random() * 0.52 + wSkid * 0.25,
+          -chassisBody.velocity.z * 0.24 + tempChassisRight.z * lateralOut + (Math.random() - 0.5) * 0.95
+        );
+        smokeSystem.spawn(tempWheelPos, tempSmokeVel, {
+          startScale: 0.24 + wSkid * 0.08,
+          endScale: 1.75 + wSkid * 1.15 + Math.random() * 0.45,
+          opacity: 0.34 + wSkid * 0.18,
+          maxAge: 1.15 + Math.random() * 0.85,
+          buoyancy: 0.65 + Math.random() * 0.35,
+          drag: 0.36,
+          colorHex: 0xe6ecf2
+        });
+      }
     }
   }
+  skidMarkSystem.commitUpdates();
 
   // Torque-steer suave quando destraciona a frente com turbo cheio (oscilação contínua, sem tremedeira aleatória)
   if (isFrontWheelSpinningTurbo) {
