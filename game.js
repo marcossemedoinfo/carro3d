@@ -76,18 +76,18 @@ const CORSA_SPECS = {
     '5': 830
   },
   maxSteerAngle: 0.50,                    // ~28.5 graus em baixa velocidade
-  // Suspensão MacPherson dianteira (motor transversal) + eixo de torção traseiro
-  frontSuspensionStiffness: 36.0,
-  rearSuspensionStiffness: 29.0,
+  // Suspensão MacPherson dianteira (motor transversal) + eixo de torção traseiro com curso real
+  frontSuspensionStiffness: 24.5,
+  rearSuspensionStiffness: 20.5,
   suspensionRestLength: 0.34 * CAR_SCALE,
-  maxSuspensionTravel: 0.22 * CAR_SCALE,
-  frontDampingCompression: 4.8,
-  frontDampingRelaxation: 6.0,
-  rearDampingCompression: 4.2,
-  rearDampingRelaxation: 5.2,
-  frontAntiRollStiffness: 17500,          // Barra estabilizadora dianteira (N/m) — segura rolagem nas curvas
-  rearAntiRollStiffness: 12500,           // Barra estabilizadora traseira (N/m) — equilíbrio e controle de traseira
-  rollInfluence: 0.16,                    // Inclinação natural da carroceria e transferência de peso nas curvas
+  maxSuspensionTravel: 0.24 * CAR_SCALE,
+  frontDampingCompression: 3.1,
+  frontDampingRelaxation: 4.1,
+  rearDampingCompression: 2.8,
+  rearDampingRelaxation: 3.6,
+  frontAntiRollStiffness: 9200,           // Barra estabilizadora dianteira (N/m) — segura sem matar o balanço natural
+  rearAntiRollStiffness: 6800,            // Barra estabilizadora traseira (N/m) — permite transferência lateral viva
+  rollInfluence: 0.44,                    // Mantém rolagem e transferência de peso naturais dos pneus nas curvas
   frictionSlipNormal: 1.68,               // Coeficiente de atrito estático de pneu radial no asfalto seco
   frictionSlipHandbrake: 1.15             // Atrito dinâmico das rodas traseiras quando travadas pelo freio de mão
 };
@@ -3375,8 +3375,8 @@ function applyAntiRollPair(wheelL, wheelR, stiffness) {
   const compL = wheelL.suspensionRestLength - wheelL.suspensionLength;
   const compR = wheelR.suspensionRestLength - wheelR.suspensionLength;
   const relVelDiff = (wheelL.suspensionRelativeVelocity || 0) - (wheelR.suspensionRelativeVelocity || 0);
-  const rawForce = (compL - compR) * stiffness - relVelDiff * (stiffness * 0.025);
-  const clampedForce = THREE.MathUtils.clamp(rawForce, -4200, 4200);
+  const rawForce = (compL - compR) * stiffness - relVelDiff * (stiffness * 0.032);
+  const clampedForce = THREE.MathUtils.clamp(rawForce, -3400, 3400);
   if (Math.abs(clampedForce) < 2.0) return;
 
   // Empurra lado mais comprimido para cima e traciona lado estendido para baixo (torque de rolagem puro)
@@ -3389,6 +3389,12 @@ function applyAntiRollPair(wheelL, wheelR, stiffness) {
   chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
 }
 
+const tempSubstepFwd = new CANNON.Vec3();
+const tempSubstepRight = new CANNON.Vec3();
+let prevSubstepFwdSpeed = 0;
+let smoothPitchCouple = 0;
+let smoothRollCouple = 0;
+
 function applyChassisSimulationForces() {
   if (!vehicle || !chassisBody || !state.loaded) return;
 
@@ -3396,20 +3402,79 @@ function applyChassisSimulationForces() {
   applyAntiRollPair(vehicle.wheelInfos[0], vehicle.wheelInfos[1], CORSA_SPECS.frontAntiRollStiffness);
   applyAntiRollPair(vehicle.wheelInfos[2], vehicle.wheelInfos[3], CORSA_SPECS.rearAntiRollStiffness);
 
-  // 2. Arrasto aerodinâmico real (F ~ v²), resistência ao rolamento dos pneus e downforce sutil no chassi
+  let wheelsOnGround = 0;
+  for (let i = 0; i < 4; i++) {
+    if (vehicle.wheelInfos[i] && vehicle.wheelInfos[i].isInContact) wheelsOnGround++;
+  }
+  const groundFactor = wheelsOnGround * 0.25;
+
+  // 2. Arrasto aerodinâmico real (F ~ v²), resistência ao rolamento e transferência dinâmica de peso (mergulho/agachamento/rolagem)
   const vx = chassisBody.velocity.x;
   const vy = chassisBody.velocity.y;
   const vz = chassisBody.velocity.z;
   const speedSq = vx * vx + vy * vy + vz * vz;
+
+  tempSubstepFwd.set(0, 0, -1);
+  chassisBody.quaternion.vmult(tempSubstepFwd, tempSubstepFwd);
+  tempSubstepRight.set(1, 0, 0);
+  chassisBody.quaternion.vmult(tempSubstepRight, tempSubstepRight);
+
+  const curFwdSpeed = vx * tempSubstepFwd.x + vy * tempSubstepFwd.y + vz * tempSubstepFwd.z;
+  const rawLongAccel = THREE.MathUtils.clamp((curFwdSpeed - prevSubstepFwdSpeed) * 60.0, -10.5, 9.0);
+  prevSubstepFwdSpeed = curFwdSpeed;
+
+  // Aceleração centrípeta lateral real: a_lat = v_fwd * yaw_rate (em rad/s * m/s)
+  const rawLatAccel = THREE.MathUtils.clamp(curFwdSpeed * chassisBody.angularVelocity.y, -11.0, 11.0);
+
+  if (wheelsOnGround >= 2) {
+    // Binário puro de transferência longitudinal (+ acelera = traseira agacha e frente levanta; - freia = frente mergulha)
+    const targetPitchF = THREE.MathUtils.clamp(rawLongAccel * 175.0, -1850, 1850);
+    smoothPitchCouple = THREE.MathUtils.lerp(smoothPitchCouple, targetPitchF, 0.24);
+    if (Math.abs(smoothPitchCouple) > 8.0) {
+      tempCannonForce.set(0, smoothPitchCouple, 0);
+      tempCannonPoint.set(0, 0, -1.14 * CAR_SCALE);
+      chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+
+      tempCannonForce.set(0, -smoothPitchCouple, 0);
+      tempCannonPoint.set(0, 0, 1.30 * CAR_SCALE);
+      chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+    }
+
+    // Binário puro de rolagem lateral conforme esterça/contorna curvas (peso vai para o lado externo da curva!)
+    const targetRollF = THREE.MathUtils.clamp(rawLatAccel * 185.0, -1750, 1750);
+    smoothRollCouple = THREE.MathUtils.lerp(smoothRollCouple, targetRollF, 0.22);
+    if (Math.abs(smoothRollCouple) > 8.0) {
+      tempCannonForce.set(0, smoothRollCouple, 0);
+      tempCannonPoint.set(-0.75 * CAR_SCALE, 0, 0);
+      chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+
+      tempCannonForce.set(0, -smoothRollCouple, 0);
+      tempCannonPoint.set(0.75 * CAR_SCALE, 0, 0);
+      chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+    }
+  } else {
+    smoothPitchCouple *= 0.85;
+    smoothRollCouple *= 0.85;
+  }
+
+  // Batente elástico progressivo de segurança contra capotamento em curvas extremas (~9°+)
+  const rollSin = tempSubstepRight.y;
+  if (Math.abs(rollSin) > 0.145) {
+    const excessRoll = rollSin - Math.sign(rollSin) * 0.145;
+    const guardForce = THREE.MathUtils.clamp(excessRoll * 18000.0, -4500, 4500);
+    tempCannonForce.set(0, guardForce, 0);
+    tempCannonPoint.set(-0.75 * CAR_SCALE, 0, 0);
+    chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+
+    tempCannonForce.set(0, -guardForce, 0);
+    tempCannonPoint.set(0.75 * CAR_SCALE, 0, 0);
+    chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
+  }
+
   if (speedSq > 0.04) {
     const speed = Math.sqrt(speedSq);
     const invSpeed = 1.0 / speed;
 
-    let wheelsOnGround = 0;
-    for (let i = 0; i < 4; i++) {
-      if (vehicle.wheelInfos[i] && vehicle.wheelInfos[i].isInContact) wheelsOnGround++;
-    }
-    const groundFactor = wheelsOnGround * 0.25;
     const surfProfile = SURFACE_PROFILES[state.surfaceType] || SURFACE_PROFILES.asphalt;
     const dragMag = 0.92 * speedSq;
     const rollResMag = 132.0 * surfProfile.rollingMul * groundFactor * Math.min(1.0, speed / 0.6);
@@ -3431,7 +3496,7 @@ function setupCorsaPhysics(comOffsetY) {
     mass: CORSA_SPECS.mass,
     material: chassisMat,
     linearDamping: 0.012,
-    angularDamping: 0.15 // Permite transferência de peso natural (mergulho, rolagem e inclinação)
+    angularDamping: 0.08 // Amortecimento leve que libera inclinação, mergulho e balanço vivo da suspensão
   });
 
   // Caixa de colisão elevada (fundo bem acima do asfalto para nunca bater no chão)
@@ -3453,7 +3518,7 @@ function setupCorsaPhysics(comOffsetY) {
   WHEEL_HUBS_LOCAL.forEach((wInfo) => {
     const connX = wInfo.pos.x;
     const wheelHubY = wInfo.pos.y - comOffsetY;
-    const connY = wheelHubY + CORSA_SPECS.suspensionRestLength - 0.03 * CAR_SCALE;
+    const connY = wheelHubY + CORSA_SPECS.suspensionRestLength + 0.005 * CAR_SCALE;
     const connZ = wInfo.pos.z;
 
     vehicle.addWheel({
@@ -3511,6 +3576,12 @@ function resetCarToSpawn(spawnIndex = state.spawnIdx) {
   state.tcsActive = false;
   state.surfaceType = 'asphalt';
   state.cuttingRev = false;
+  prevSubstepFwdSpeed = 0;
+  smoothPitchCouple = 0;
+  smoothRollCouple = 0;
+  smoothCamHeading = null;
+  smoothCamZoomOffset = 0;
+  smoothCamLatOffset = 0;
   for (let i = 0; i < 4; i++) state.wheelSkids[i] = 0;
   skidMarkSystem.resetWheelLinks();
 
@@ -3659,8 +3730,8 @@ function updateVehiclePhysicsAndEffects(dt) {
   }
 
   const isReturningToCenter = Math.abs(targetSteer) < 0.05 || (targetSteer * state.currentSteer < 0);
-  const speedCasterRate = 8.0 + THREE.MathUtils.clamp(state.speedKmh / 90, 0, 1.0) * 4.5;
-  const steerRate = isReturningToCenter ? speedCasterRate : 7.0;
+  const speedCasterRate = 7.4 + THREE.MathUtils.clamp(state.speedKmh / 90, 0, 1.0) * 4.2;
+  const steerRate = isReturningToCenter ? speedCasterRate : 5.6;
   state.currentSteer = THREE.MathUtils.lerp(state.currentSteer, desiredSteer, Math.min(1, dt * steerRate));
 
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer > 0 ? 1.04 : 0.96), 0); // FL
@@ -4221,6 +4292,8 @@ const tempCamBehind = new THREE.Vector3();
 const tempCamOffset = new THREE.Vector3();
 const tempCamLookOffset = new THREE.Vector3();
 let smoothCamHeading = null;
+let smoothCamZoomOffset = 0;
+let smoothCamLatOffset = 0;
 
 function updateCamera(dt) {
   if (!corsaChassisVisual) return;
@@ -4229,25 +4302,45 @@ function updateCamera(dt) {
   const carQuat = corsaChassisVisual.quaternion;
 
   tempCamForward.set(0, 0, -1).applyQuaternion(carQuat);
+  // Atenua o pitch na câmera de perseguição para o jogador enxergar o mergulho/levantar da carroceria sobre o horizonte
+  tempCamForward.y *= 0.45;
+  tempCamForward.normalize();
 
   if (!smoothCamHeading) {
     smoothCamHeading = tempCamForward.clone();
   } else {
-    smoothCamHeading.lerp(tempCamForward, Math.min(1.0, dt * 8.5)).normalize();
+    const camTrackRate = 5.4 + Math.min(state.speedKmh / 160, 1.0) * 2.4;
+    smoothCamHeading.lerp(tempCamForward, Math.min(1.0, dt * camTrackRate)).normalize();
+  }
+
+  // Sensação elástica de força G longitudinal (acelerando afasta levemente, freando aproxima) e lateral nas curvas
+  const targetZoomOffset = -state.longitudinalLoad * 0.28 + Math.min(state.speedKmh / 180, 1.0) * 0.48;
+  smoothCamZoomOffset = THREE.MathUtils.lerp(smoothCamZoomOffset, targetZoomOffset, Math.min(1.0, dt * 5.0));
+
+  const targetLatOffset = THREE.MathUtils.clamp(state.lateralSpeedMs * 0.045, -0.32, 0.32);
+  smoothCamLatOffset = THREE.MathUtils.lerp(smoothCamLatOffset, targetLatOffset, Math.min(1.0, dt * 4.5));
+
+  const targetFov = state.cameraMode === 0
+    ? 58 + Math.min(state.speedKmh / 200, 1.0) * 6.5 + Math.max(0, -state.longitudinalLoad) * 2.5
+    : 58;
+  if (Math.abs(camera.fov - targetFov) > 0.05) {
+    camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, Math.min(1.0, dt * 4.0));
+    camera.updateProjectionMatrix();
   }
 
   if (state.cameraMode === 0) {
-    // 0: PERSEGUIÇÃO
-    const dist = (5.35 + Math.min(state.speedKmh / 180, 1.0) * 0.55) * CAR_SCALE;
-    const height = 1.62 * CAR_SCALE;
+    // 0: PERSEGUIÇÃO DINÂMICA (permite ver rolagem, balanço da traseira, mergulho e agachamento da suspensão)
+    const dist = (5.25 + smoothCamZoomOffset) * CAR_SCALE;
+    const height = 1.60 * CAR_SCALE;
     tempCamBehind.copy(smoothCamHeading).multiplyScalar(-1);
     tempCamBehind.applyAxisAngle(axisY, state.orbitYaw);
 
     camCurrentPos.copy(carPos).addScaledVector(tempCamBehind, dist);
+    camCurrentPos.addScaledVector(tempChassisRight, smoothCamLatOffset * CAR_SCALE);
     camCurrentPos.y = carPos.y + height + Math.sin(state.orbitPitch) * (1.5 * CAR_SCALE);
     camCurrentLook.copy(carPos);
-    camCurrentLook.y += 0.32 * CAR_SCALE;
-    camCurrentLook.addScaledVector(smoothCamHeading, 1.4 * CAR_SCALE);
+    camCurrentLook.y += 0.34 * CAR_SCALE;
+    camCurrentLook.addScaledVector(smoothCamHeading, 1.45 * CAR_SCALE);
   } else if (state.cameraMode === 1) {
     // 1: CAPÔ (MOTOR)
     tempCamOffset.set(0, 0.68 * CAR_SCALE, -0.38 * CAR_SCALE).applyQuaternion(carQuat);
