@@ -87,7 +87,7 @@ const CORSA_SPECS = {
   rearDampingRelaxation: 3.6,
   frontAntiRollStiffness: 9200,           // Barra estabilizadora dianteira (N/m) — segura sem matar o balanço natural
   rearAntiRollStiffness: 6800,            // Barra estabilizadora traseira (N/m) — permite transferência lateral viva
-  rollInfluence: 0.44,                    // Mantém rolagem e transferência de peso naturais dos pneus nas curvas
+  rollInfluence: 0.24,                    // Mantém inclinação lateral expressiva sem descarregar a traseira no drift
   frictionSlipNormal: 1.68,               // Coeficiente de atrito estático de pneu radial no asfalto seco
   frictionSlipHandbrake: 1.15             // Atrito dinâmico das rodas traseiras quando travadas pelo freio de mão
 };
@@ -3391,6 +3391,7 @@ function applyAntiRollPair(wheelL, wheelR, stiffness) {
 
 const tempSubstepFwd = new CANNON.Vec3();
 const tempSubstepRight = new CANNON.Vec3();
+const tempSubstepUp = new CANNON.Vec3();
 let prevSubstepFwdSpeed = 0;
 let smoothPitchCouple = 0;
 let smoothRollCouple = 0;
@@ -3418,17 +3419,25 @@ function applyChassisSimulationForces() {
   chassisBody.quaternion.vmult(tempSubstepFwd, tempSubstepFwd);
   tempSubstepRight.set(1, 0, 0);
   chassisBody.quaternion.vmult(tempSubstepRight, tempSubstepRight);
+  tempSubstepUp.set(0, 1, 0);
+  chassisBody.quaternion.vmult(tempSubstepUp, tempSubstepUp);
 
   const curFwdSpeed = vx * tempSubstepFwd.x + vy * tempSubstepFwd.y + vz * tempSubstepFwd.z;
+  const yawRate =
+    chassisBody.angularVelocity.x * tempSubstepUp.x +
+    chassisBody.angularVelocity.y * tempSubstepUp.y +
+    chassisBody.angularVelocity.z * tempSubstepUp.z;
   const rawLongAccel = THREE.MathUtils.clamp((curFwdSpeed - prevSubstepFwdSpeed) * 60.0, -10.5, 9.0);
   prevSubstepFwdSpeed = curFwdSpeed;
 
   // Aceleração centrípeta lateral real: a_lat = v_fwd * yaw_rate (em rad/s * m/s)
-  const rawLatAccel = THREE.MathUtils.clamp(curFwdSpeed * chassisBody.angularVelocity.y, -11.0, 11.0);
+  const rawLatAccel = THREE.MathUtils.clamp(curFwdSpeed * yawRate, -11.0, 11.0);
+  const isHandbrakingSubstep = state.handbrakeInput > 0.5;
 
   if (wheelsOnGround >= 2) {
     // Binário puro de transferência longitudinal (+ acelera = traseira agacha e frente levanta; - freia = frente mergulha)
-    const targetPitchF = THREE.MathUtils.clamp(rawLongAccel * 175.0, -1850, 1850);
+    const pitchScale = isHandbrakingSubstep ? 0.55 : 1.0;
+    const targetPitchF = THREE.MathUtils.clamp(rawLongAccel * 175.0 * pitchScale, -1850, 1850);
     smoothPitchCouple = THREE.MathUtils.lerp(smoothPitchCouple, targetPitchF, 0.24);
     if (Math.abs(smoothPitchCouple) > 8.0) {
       tempCannonForce.set(0, smoothPitchCouple, 0);
@@ -3440,8 +3449,9 @@ function applyChassisSimulationForces() {
       chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
     }
 
-    // Binário puro de rolagem lateral conforme esterça/contorna curvas (peso vai para o lado externo da curva!)
-    const targetRollF = THREE.MathUtils.clamp(rawLatAccel * 185.0, -1750, 1750);
+    // Binário puro de rolagem lateral conforme esterça/contorna curvas (amortecido no freio de mão para não levantar a traseira interna)
+    const rollScale = isHandbrakingSubstep ? 0.58 : 1.0;
+    const targetRollF = THREE.MathUtils.clamp(rawLatAccel * 175.0 * rollScale, -1650, 1650);
     smoothRollCouple = THREE.MathUtils.lerp(smoothRollCouple, targetRollF, 0.22);
     if (Math.abs(smoothRollCouple) > 8.0) {
       tempCannonForce.set(0, smoothRollCouple, 0);
@@ -3452,6 +3462,33 @@ function applyChassisSimulationForces() {
       tempCannonPoint.set(0.75 * CAR_SCALE, 0, 0);
       chassisBody.applyLocalForce(tempCannonForce, tempCannonPoint);
     }
+
+    // Estabilidade direcional dedicada no eixo Y (guinada) sem endurecer o pitch/roll da suspensão:
+    // restaura o peso de borracha de ~0.40 na guinada e impede que o freio de mão dê pirueta (spinout 360°)
+    let yawDampTorque = -yawRate * 260.0;
+    const curLatSpeed = vx * tempSubstepRight.x + vy * tempSubstepRight.y + vz * tempSubstepRight.z;
+    const slideAngleRad = Math.atan2(Math.abs(curLatSpeed), Math.max(1.5, Math.abs(curFwdSpeed)));
+    const isRotatingIntoSpin = curFwdSpeed > 1.5 && yawRate * curLatSpeed > 0;
+
+    if (isHandbrakingSubstep) {
+      const maxDriftYaw = THREE.MathUtils.clamp(0.88 + Math.abs(curFwdSpeed) * 0.024, 0.88, 1.35);
+      const excessYaw = Math.abs(yawRate) - maxDriftYaw;
+      if (excessYaw > 0 && isRotatingIntoSpin) {
+        yawDampTorque -= Math.sign(yawRate) * excessYaw * 1650.0;
+      }
+      if (slideAngleRad > 0.56 && isRotatingIntoSpin) {
+        // Acima de ~32° de ângulo de drift girando para fora, segura progressivamente para sustentar a atravessada sem rodar
+        const angleFactor = THREE.MathUtils.clamp((slideAngleRad - 0.56) / 0.42, 0.0, 1.0);
+        yawDampTorque -= yawRate * (520.0 + angleFactor * 1200.0);
+      }
+    } else if (slideAngleRad > 0.68 && isRotatingIntoSpin) {
+      // Ao soltar o freio de mão no meio da curva, evita chicoteamento reverso/pirueta tardia
+      const releaseAngleFactor = THREE.MathUtils.clamp((slideAngleRad - 0.68) / 0.40, 0.0, 1.0);
+      yawDampTorque -= yawRate * releaseAngleFactor * 750.0;
+    }
+    chassisBody.torque.x += tempSubstepUp.x * yawDampTorque;
+    chassisBody.torque.y += tempSubstepUp.y * yawDampTorque;
+    chassisBody.torque.z += tempSubstepUp.z * yawDampTorque;
   } else {
     smoothPitchCouple *= 0.85;
     smoothRollCouple *= 0.85;
@@ -3496,7 +3533,7 @@ function setupCorsaPhysics(comOffsetY) {
     mass: CORSA_SPECS.mass,
     material: chassisMat,
     linearDamping: 0.012,
-    angularDamping: 0.08 // Amortecimento leve que libera inclinação, mergulho e balanço vivo da suspensão
+    angularDamping: 0.14 // Mantém pitch/roll vivos enquanto a estabilidade de guinada controla o drift no substep
   });
 
   // Caixa de colisão elevada (fundo bem acima do asfalto para nunca bater no chão)
@@ -3722,16 +3759,18 @@ function updateVehiclePhysicsAndEffects(dt) {
   const maxSteerNow = CORSA_SPECS.maxSteerAngle * speedFactor;
 
   let desiredSteer = targetSteer * maxSteerNow;
-  if (Math.abs(targetSteer) < 0.05 && state.forwardSpeedMs > 3.5 && absSlipDeg > 8.0) {
+  if (Math.abs(targetSteer) < 0.05 && state.forwardSpeedMs > 3.5 && absSlipDeg > 7.5) {
     // Geometria de caster alinha as rodas dianteiras naturalmente na direção da trajetória durante derrapagem
     const casterSign = Math.sign(state.lateralSpeedMs);
-    const casterAssist = THREE.MathUtils.clamp((absSlipDeg - 8.0) / 30.0, 0, 0.42) * maxSteerNow;
+    const maxCaster = state.handbrakeInput > 0.5 ? 0.56 : 0.44;
+    const casterAssist = THREE.MathUtils.clamp((absSlipDeg - 7.5) / 28.0, 0, maxCaster) * maxSteerNow;
     desiredSteer = -casterSign * casterAssist;
   }
 
   const isReturningToCenter = Math.abs(targetSteer) < 0.05 || (targetSteer * state.currentSteer < 0);
-  const speedCasterRate = 7.4 + THREE.MathUtils.clamp(state.speedKmh / 90, 0, 1.0) * 4.2;
-  const steerRate = isReturningToCenter ? speedCasterRate : 5.6;
+  const isCounterSteering = absSlipDeg > 8.0 && targetSteer * state.lateralSpeedMs < 0;
+  const speedCasterRate = 8.4 + THREE.MathUtils.clamp(state.speedKmh / 90, 0, 1.0) * 4.5;
+  const steerRate = isCounterSteering ? 10.2 : isReturningToCenter ? speedCasterRate : 6.4;
   state.currentSteer = THREE.MathUtils.lerp(state.currentSteer, desiredSteer, Math.min(1, dt * steerRate));
 
   vehicle.setSteeringValue(state.currentSteer * (state.currentSteer > 0 ? 1.04 : 0.96), 0); // FL
@@ -3927,9 +3966,10 @@ function updateVehiclePhysicsAndEffects(dt) {
   const openDiffSlipFR = !state.turboInstalled && state.throttleInput > 0.65 && loadRatioFR < 0.78 ? 0.84 : 1.0;
 
   if (isHandbraking) {
-    // Freio de mão mecânico atua exclusivamente travando as rodas traseiras (preserva resposta exata!)
-    vehicle.wheelInfos[0].frictionSlip = baseGrip * surfGrip0 * loadSens(loadRatioFL);
-    vehicle.wheelInfos[1].frictionSlip = baseGrip * surfGrip1 * loadSens(loadRatioFR);
+    // Freio de mão mecânico atua exclusivamente travando as rodas traseiras com frente estável (sem efeito pêndulo/pirueta)
+    const frontDriftTrim = absSlipDeg > 26 ? THREE.MathUtils.clamp(1.0 - (absSlipDeg - 26) * 0.008, 0.82, 1.0) : 1.0;
+    vehicle.wheelInfos[0].frictionSlip = baseGrip * surfGrip0 * frontDriftTrim;
+    vehicle.wheelInfos[1].frictionSlip = baseGrip * surfGrip1 * frontDriftTrim;
     vehicle.wheelInfos[2].frictionSlip = CORSA_SPECS.frictionSlipHandbrake * surfGrip2;
     vehicle.wheelInfos[3].frictionSlip = CORSA_SPECS.frictionSlipHandbrake * surfGrip3;
   } else if (isFrontWheelSpinningTurbo && !state.tcsActive) {
