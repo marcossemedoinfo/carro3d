@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import * as CANNON from 'cannon-es';
 
 // ============================================================================
 // 1. VERSÃO, ESCALA REALISTA E PARÂMETROS DO OPEL CORSA B 1998 (FWD)
 // ============================================================================
-const GAME_VERSION = '1.06';
+const GAME_VERSION = '1.07';
 const CITY_SCALE = 1.0;         // San Francisco já está em escala métrica real 1:1 (ruas de 15m/30m)
 const CAR_SCALE = 1.05;         // Escala real proporcional do Opel Corsa B 1998 em San Francisco
 const WORLD_SPEED_SCALE = 0.55; // Ritmo físico natural para avenidas, pontes e ladeiras reais
@@ -14,6 +15,21 @@ const WORLD_SPEED_SCALE = 0.55; // Ritmo físico natural para avenidas, pontes e
 const COLLISION_GROUND = 1;
 const COLLISION_CHASSIS = 2;
 const COLLISION_WALLS = 4;
+const COLLISION_TRAFFIC = 8;
+
+const TRAFFIC_FLOW_PRESETS = {
+  low: { key: 'low', label: 'LOW', shortLabel: 'Leve', maxCars: 8, maxPeds: 14, carRadius: 155, pedRadius: 90 },
+  medium: { key: 'medium', label: 'MÉDIO', shortLabel: 'Médio', maxCars: 15, maxPeds: 26, carRadius: 175, pedRadius: 105 },
+  high: { key: 'high', label: 'ALTO', shortLabel: 'Intenso', maxCars: 24, maxPeds: 40, carRadius: 195, pedRadius: 115 }
+};
+
+function getSavedTrafficFlow() {
+  try {
+    const saved = localStorage.getItem('corsa3d_traffic');
+    if (saved && TRAFFIC_FLOW_PRESETS[saved]) return saved;
+  } catch (e) {}
+  return 'medium';
+}
 
 // Pontos de Spawn verificados diretamente sobre o asfalto plano (ny = 1.0) de San Francisco
 const SPAWN_POINTS = [
@@ -355,6 +371,7 @@ const state = {
   timeHour: 12.0,
   graphicsQuality: getSavedGraphicsQuality(),
   graphicsMenuOpen: false,
+  trafficFlow: getSavedTrafficFlow(),
   headlightsOn: false,    // Faróis dianteiros e lanternas traseiras (Tecla L ou botão HUD)
   turboInstalled: false,  // Kit Turbo com espirro de alívio nas trocas de marcha e torque extra
   turboBoost: 0.0,        // Pressão atual da turbina: 0.0 (sem pressão) a 1.0 (turbo cheio / 1.5 bar)
@@ -493,11 +510,11 @@ class SpatialCarAudio {
   async loadAll(onProgress) {
     const audioLoader = new THREE.AudioLoader();
     const files = [
-      { key: 'start', url: './Corsa ligando.mp3' },
-      { key: 'revCut', url: './Cortar giro.mp3' },
-      { key: 'accel', url: './Acelerações.mp3' },
-      { key: 'skid', url: './Carro derrapando.mp3' },
-      { key: 'turbo', url: './turbo.mp3' }
+      { key: 'start', url: './assets/sons/Corsa ligando.mp3' },
+      { key: 'revCut', url: './assets/sons/Cortar giro.mp3' },
+      { key: 'accel', url: './assets/sons/Acelerações.mp3' },
+      { key: 'skid', url: './assets/sons/Carro derrapando.mp3' },
+      { key: 'turbo', url: './assets/sons/turbo.mp3' }
     ];
 
     for (let i = 0; i < files.length; i++) {
@@ -2162,6 +2179,1519 @@ function buildBatchedCityRenderGroup(cityScene) {
 }
 
 // ============================================================================
+// SISTEMA DE TRÂNSITO (IA) E PEDESTRES NAS CALÇADAS (SAN FRANCISCO)
+// ============================================================================
+const TRAFFIC_CAR_CONFIGS = [
+  { key: 'voyage', url: './assets/carros/Carro transito 1.glb', yawOffset: 0, targetLen: 4.15 },
+  { key: 'suv', url: './assets/carros/Carro transito 2.glb', yawOffset: -Math.PI / 2, targetLen: 4.35 },
+  { key: 'chevette', url: './assets/carros/Carro transito 3.glb', yawOffset: Math.PI, targetLen: 4.12 },
+  { key: 'sedan4', url: './assets/carros/Carro Transito 4.glb', yawOffset: -Math.PI / 2, targetLen: 4.30 }
+];
+
+const PEDESTRIAN_CONFIGS = [
+  { key: 'ped1', url: './assets/pedestres/Pedestre 1.glb', stripRootXZ: false },
+  { key: 'ped2', url: './assets/pedestres/Pedestre 2.glb', stripRootXZ: true },
+  { key: 'ped3', url: './assets/pedestres/Pedestre 3.glb', stripRootXZ: false },
+  { key: 'ped4', url: './assets/pedestres/Pedestre 4.glb', stripRootXZ: false }
+];
+
+const SF_GRID_OX = 1.12;
+const SF_GRID_OZ = 4.09;
+const CARDINAL_DIRS = [
+  { dx: 1, dz: 0, rx: 0, rz: 1, opp: 1, yaw: -Math.PI / 2 },
+  { dx: -1, dz: 0, rx: 0, rz: -1, opp: 0, yaw: Math.PI / 2 },
+  { dx: 0, dz: 1, rx: -1, rz: 0, opp: 3, yaw: Math.PI },
+  { dx: 0, dz: -1, rx: 1, rz: 0, opp: 2, yaw: 0 }
+];
+
+function createSoftBlobShadowTexture() {
+  const cvs = document.createElement('canvas');
+  cvs.width = 64;
+  cvs.height = 64;
+  const ctx = cvs.getContext('2d');
+  const grad = ctx.createRadialGradient(32, 32, 6, 32, 32, 30);
+  grad.addColorStop(0, 'rgba(0, 0, 0, 0.56)');
+  grad.addColorStop(0.55, 'rgba(0, 0, 0, 0.24)');
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function createLightGlowSpriteTexture() {
+  const cvs = document.createElement('canvas');
+  cvs.width = 64;
+  cvs.height = 64;
+  const ctx = cvs.getContext('2d');
+  const grad = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+  grad.addColorStop(0.35, 'rgba(255, 255, 255, 0.65)');
+  grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+class GroundHeightSampler {
+  constructor() {
+    this.cellSize = 25;
+    this.buckets = new Map();
+  }
+
+  addTriangle(ax, ay, az, bx, by, bz, cx, cy, cz, ny) {
+    const minX = Math.min(ax, bx, cx);
+    const maxX = Math.max(ax, bx, cx);
+    const minZ = Math.min(az, bz, cz);
+    const maxZ = Math.max(az, bz, cz);
+    const tri = { ax, ay, az, bx, by, bz, cx, cy, cz, ny, minX, maxX, minZ, maxZ };
+    const cx0 = Math.floor(minX / this.cellSize);
+    const cx1 = Math.floor(maxX / this.cellSize);
+    const cz0 = Math.floor(minZ / this.cellSize);
+    const cz1 = Math.floor(maxZ / this.cellSize);
+    for (let ix = cx0; ix <= cx1; ix++) {
+      for (let iz = cz0; iz <= cz1; iz++) {
+        const key = `${ix}:${iz}`;
+        let arr = this.buckets.get(key);
+        if (!arr) {
+          arr = [];
+          this.buckets.set(key, arr);
+        }
+        arr.push(tri);
+      }
+    }
+  }
+
+  sample(x, z, refY) {
+    const ix = Math.floor(x / this.cellSize);
+    const iz = Math.floor(z / this.cellSize);
+    const arr = this.buckets.get(`${ix}:${iz}`);
+    if (!arr) return null;
+
+    let bestY = null;
+    let bestDiff = Infinity;
+    for (let i = 0; i < arr.length; i++) {
+      const t = arr[i];
+      if (x < t.minX - 0.1 || x > t.maxX + 0.1 || z < t.minZ - 0.1 || z > t.maxZ + 0.1) continue;
+      const v0x = t.cx - t.ax;
+      const v0z = t.cz - t.az;
+      const v1x = t.bx - t.ax;
+      const v1z = t.bz - t.az;
+      const v2x = x - t.ax;
+      const v2z = z - t.az;
+      const d00 = v0x * v0x + v0z * v0z;
+      const d01 = v0x * v1x + v0z * v1z;
+      const d11 = v1x * v1x + v1z * v1z;
+      const denom = d00 * d11 - d01 * d01;
+      if (Math.abs(denom) < 1e-6) continue;
+      const inv = 1 / denom;
+      const d20 = v2x * v0x + v2z * v0z;
+      const d21 = v2x * v1x + v2z * v1z;
+      const u = (d11 * d20 - d01 * d21) * inv;
+      const v = (d00 * d21 - d01 * d20) * inv;
+      if (u >= -0.025 && v >= -0.025 && u + v <= 1.025) {
+        const y = t.ay + u * (t.cy - t.ay) + v * (t.by - t.ay);
+        const diff = Math.abs(y - refY);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestY = y;
+        }
+      }
+    }
+    if (bestY === null || bestDiff > 8.5) return null;
+    return bestY;
+  }
+}
+
+function getMeshHierarchyPathLower(obj) {
+  const parts = [];
+  let cur = obj;
+  while (cur) {
+    if (cur.name) parts.push(cur.name.toLowerCase());
+    cur = cur.parent;
+  }
+  return parts.reverse().join('/');
+}
+
+function buildCityNavigationGraphs(cityRoot) {
+  cityRoot.updateMatrixWorld(true);
+  const sampler = new GroundHeightSampler();
+  const wallHash = new Map();
+  const roadGrid = new Map();
+
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
+  const e1 = new THREE.Vector3();
+  const e2 = new THREE.Vector3();
+  const norm = new THREE.Vector3();
+
+  const addWallBox = (minX, maxX, minZ, maxZ, minY, maxY) => {
+    const wb = { minX, maxX, minZ, maxZ, minY, maxY };
+    const x0 = Math.floor(minX / 15);
+    const x1 = Math.floor(maxX / 15);
+    const z0 = Math.floor(minZ / 15);
+    const z1 = Math.floor(maxZ / 15);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cz = z0; cz <= z1; cz++) {
+        const k = `${cx}:${cz}`;
+        let list = wallHash.get(k);
+        if (!list) {
+          list = [];
+          wallHash.set(k, list);
+        }
+        list.push(wb);
+      }
+    }
+  };
+
+  const segClear = (x0, z0, x1, z1, yApprox, pad) => {
+    const minX = Math.min(x0, x1) - pad;
+    const maxX = Math.max(x0, x1) + pad;
+    const minZ = Math.min(z0, z1) - pad;
+    const maxZ = Math.max(z0, z1) + pad;
+    const cx0 = Math.floor(minX / 15);
+    const cx1 = Math.floor(maxX / 15);
+    const cz0 = Math.floor(minZ / 15);
+    const cz1 = Math.floor(maxZ / 15);
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cz = cz0; cz <= cz1; cz++) {
+        const list = wallHash.get(`${cx}:${cz}`);
+        if (!list) continue;
+        for (let i = 0; i < list.length; i++) {
+          const w = list[i];
+          if (w.maxY < yApprox + 0.15 || w.minY > yApprox + 2.2) continue;
+          if (w.maxX > minX && w.minX < maxX && w.maxZ > minZ && w.minZ < maxZ) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  };
+
+  cityRoot.traverse((child) => {
+    if (!child.isMesh || !child.geometry) return;
+    const path = getMeshHierarchyPathLower(child);
+    if (path.includes('lod1') || path.includes('lod_b') || path.includes('challangemode') || path.includes('collectablesallzones')) return;
+    if (path.includes('water_') || path.includes('/water') || path.includes('ocean')) return;
+
+    const pos = child.geometry.attributes.position;
+    if (!pos) return;
+    const idx = child.geometry.index;
+    const wm = child.matrixWorld;
+    const leaf = path.split('/').pop() || '';
+    const isNw = path.includes('wall_11') || path.includes('networkbound');
+    const isRoadTile = (leaf.includes('road_01') || leaf.includes('bridge_01_connection') || leaf.includes('bridge_segment_01_03')) && !leaf.includes('parkend');
+    const isStreet = ['road_', 'streets', 'pavement', 'lombard', 'ramp', 'bridge_01_connection', 'bridge_segment_01_03', 'sidewalk', 'tunnel'].some((k) => path.includes(k));
+    const isGround = !isNw && (isStreet || path.includes('terrain_01') || path.includes('concrete_01'));
+    const isFoliage = !isGround && (path.includes('/tree') || path.includes('bush') || path.includes('pot_'));
+
+    let mnX = 1e9, mnY = 1e9, mnZ = 1e9;
+    let mxX = -1e9, mxY = -1e9, mxZ = -1e9;
+    const triCount = (idx ? idx.count : pos.count) / 3;
+
+    // Pre-scan bounding vertices
+    for (let v = 0; v < pos.count; v++) {
+      v0.fromBufferAttribute(pos, v).applyMatrix4(wm);
+      if (v0.x < mnX) mnX = v0.x;
+      if (v0.x > mxX) mxX = v0.x;
+      if (v0.y < mnY) mnY = v0.y;
+      if (v0.y > mxY) mxY = v0.y;
+      if (v0.z < mnZ) mnZ = v0.z;
+      if (v0.z > mxZ) mxZ = v0.z;
+    }
+
+    if (mxX < -920 || mnX > 920 || mxZ < -720 || mnZ > 720 || mxY < 14 || mnY > 105) return;
+
+    for (let t = 0; t < triCount; t++) {
+      const i0 = idx ? idx.getX(t * 3) : t * 3;
+      const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+      const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      v0.fromBufferAttribute(pos, i0).applyMatrix4(wm);
+      v1.fromBufferAttribute(pos, i1).applyMatrix4(wm);
+      v2.fromBufferAttribute(pos, i2).applyMatrix4(wm);
+
+      const tMinY = Math.min(v0.y, v1.y, v2.y);
+      const tMaxY = Math.max(v0.y, v1.y, v2.y);
+      if (tMinY > 105 || tMaxY < 14) continue;
+
+      e1.subVectors(v1, v0);
+      e2.subVectors(v2, v0);
+      norm.crossVectors(e1, e2);
+      const area2 = norm.length();
+      if (area2 < 0.0005) continue;
+      const ny = norm.y / area2;
+
+      if (isGround && ny > 0.35 && tMaxY <= 102.0) {
+        if (isStreet) {
+          sampler.addTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, ny);
+        }
+      } else if (!isFoliage && Math.abs(ny) < 0.48 && (tMaxY - tMinY) > 0.40 && tMinY <= 89.5 && tMaxY >= 36.0) {
+        addWallBox(
+          Math.min(v0.x, v1.x, v2.x),
+          Math.max(v0.x, v1.x, v2.x),
+          Math.min(v0.z, v1.z, v2.z),
+          Math.max(v0.z, v1.z, v2.z),
+          tMinY,
+          tMaxY
+        );
+      }
+    }
+
+    if (isRoadTile) {
+      const dx = mxX - mnX;
+      const dz = mxZ - mnZ;
+      const isBridge = leaf.includes('bridge');
+      const nxC = Math.max(1, Math.round(dx / 15.0));
+      const nzC = isBridge ? 2 : Math.max(1, Math.round(dz / 15.0));
+      const ix0 = Math.round((mnX - SF_GRID_OX) / 15.0);
+      const iz0 = isBridge ? 20 : Math.round((mnZ - SF_GRID_OZ) / 15.0);
+      const is2 = leaf.includes('_2x') || isBridge;
+      const avgY = (mnY + mxY) * 0.5;
+      for (let ix = ix0; ix < ix0 + nxC; ix++) {
+        for (let iz = iz0; iz < iz0 + nzC; iz++) {
+          const gk = `${ix}:${iz}`;
+          const prev = roadGrid.get(gk);
+          roadGrid.set(gk, {
+            ix,
+            iz,
+            y: prev ? Math.max(prev.y, avgY) : avgY,
+            is2: is2 || (prev ? prev.is2 : false),
+            isBridge: isBridge || (prev ? prev.isBridge : false),
+            cx: SF_GRID_OX + ix * 15.0 + 7.5,
+            cz: SF_GRID_OZ + iz * 15.0 + 7.5
+          });
+        }
+      }
+    }
+  });
+
+  // 1) Construir grafo viário direcionado (faixas à direita + curvas de interseção suaves + retorno sem saída)
+  const passages = new Map(); // key `${uKey}:${dIdx}` -> passage
+  const inPassagesByCell = new Map();
+  const outPassagesByCell = new Map();
+
+  for (const [cellKey, cell] of roadGrid.entries()) {
+    for (let dIdx = 0; dIdx < 4; dIdx++) {
+      const d = CARDINAL_DIRS[dIdx];
+      const nbKey = `${cell.ix + d.dx}:${cell.iz + d.dz}`;
+      const nb = roadGrid.get(nbKey);
+      if (!nb || Math.abs(cell.y - nb.y) > 7.0) continue;
+
+      const leftCell = roadGrid.get(`${cell.ix - d.rx}:${cell.iz - d.rz}`);
+      const rightCell = roadGrid.get(`${cell.ix + d.rx}:${cell.iz + d.rz}`);
+      const hasLeft = Boolean(leftCell && cell.is2 && leftCell.is2);
+      const hasRight = Boolean(rightCell && cell.is2 && rightCell.is2);
+      if (hasRight && !hasLeft) continue; // faixa contrária em via dupla dividida
+
+      const off = hasLeft ? 0.0 : 2.55;
+      const midX = cell.cx + d.dx * 7.5 + d.rx * off;
+      const midZ = cell.cz + d.dz * 7.5 + d.rz * off;
+      const approxY = (cell.y + nb.y) * 0.5;
+      const sampledY = sampler.sample(midX, midZ, approxY);
+      const pY = sampledY !== null ? sampledY : approxY;
+
+      const pKey = `${cellKey}|${dIdx}`;
+      const passage = {
+        key: pKey,
+        uKey: cellKey,
+        vKey: nbKey,
+        dIdx,
+        portX: midX,
+        portZ: midZ,
+        portY: pY,
+        off,
+        inEdges: [],
+        outEdges: []
+      };
+      passages.set(pKey, passage);
+
+      if (!outPassagesByCell.has(cellKey)) outPassagesByCell.set(cellKey, []);
+      outPassagesByCell.get(cellKey).push(passage);
+      if (!inPassagesByCell.has(nbKey)) inPassagesByCell.set(nbKey, []);
+      inPassagesByCell.get(nbKey).push(passage);
+    }
+  }
+
+  const allCarEdges = [];
+  const addCarEdge = (inP, outP, cell) => {
+    const inDir = CARDINAL_DIRS[inP.dIdx];
+    const isStraight = inP.dIdx === outP.dIdx;
+    const isUTurn = outP.dIdx === inDir.opp;
+    const pts = [];
+
+    if (isStraight) {
+      if (!segClear(inP.portX, inP.portZ, outP.portX, outP.portZ, cell.y, 0.9)) return;
+      pts.push({ x: inP.portX, y: inP.portY, z: inP.portZ });
+      const mx = (inP.portX + outP.portX) * 0.5;
+      const mz = (inP.portZ + outP.portZ) * 0.5;
+      const my = sampler.sample(mx, mz, cell.y) ?? (inP.portY + outP.portY) * 0.5;
+      pts.push({ x: mx, y: my, z: mz });
+      pts.push({ x: outP.portX, y: outP.portY, z: outP.portZ });
+    } else if (!isUTurn) {
+      // Curva quadrática suave no cruzamento usando ponto de controle perpendicular
+      const ctrlX = inDir.dx !== 0 ? outP.portX : inP.portX;
+      const ctrlZ = inDir.dz !== 0 ? outP.portZ : inP.portZ;
+      if (!segClear(inP.portX, inP.portZ, ctrlX, ctrlZ, cell.y, 0.85)) return;
+      if (!segClear(ctrlX, ctrlZ, outP.portX, outP.portZ, cell.y, 0.85)) return;
+      const steps = 4;
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const it = 1 - t;
+        const bx = it * it * inP.portX + 2 * it * t * ctrlX + t * t * outP.portX;
+        const bz = it * it * inP.portZ + 2 * it * t * ctrlZ + t * t * outP.portZ;
+        const baseY = inP.portY + (outP.portY - inP.portY) * t;
+        const by = sampler.sample(bx, bz, baseY) ?? baseY;
+        pts.push({ x: bx, y: by, z: bz });
+      }
+    } else {
+      // Retorno em fim de rua sem saída
+      const ax = inP.portX + inDir.dx * 4.5;
+      const az = inP.portZ + inDir.dz * 4.5;
+      const bx = outP.portX + inDir.dx * 4.5;
+      const bz = outP.portZ + inDir.dz * 4.5;
+      if (!segClear(inP.portX, inP.portZ, ax, az, cell.y, 0.8)) return;
+      if (!segClear(ax, az, bx, bz, cell.y, 0.8)) return;
+      if (!segClear(bx, bz, outP.portX, outP.portZ, cell.y, 0.8)) return;
+      const rawPts = [
+        { x: inP.portX, z: inP.portZ },
+        { x: ax, z: az },
+        { x: (ax + bx) * 0.5 + inDir.dx * 1.4, z: (az + bz) * 0.5 + inDir.dz * 1.4 },
+        { x: bx, z: bz },
+        { x: outP.portX, z: outP.portZ }
+      ];
+      for (let i = 0; i < rawPts.length; i++) {
+        const rp = rawPts[i];
+        const ry = sampler.sample(rp.x, rp.z, cell.y) ?? cell.y;
+        pts.push({ x: rp.x, y: ry, z: rp.z });
+      }
+    }
+
+    // Comprimento cumulativo para interpolação exata por velocidade
+    let totalLen = 0;
+    const cumLen = [0];
+    for (let i = 1; i < pts.length; i++) {
+      totalLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+      cumLen.push(totalLen);
+    }
+    if (totalLen < 2.0) return;
+
+    const edge = {
+      id: allCarEdges.length,
+      from: inP,
+      to: outP,
+      pts,
+      cumLen,
+      length: totalLen,
+      isTurn: !isStraight,
+      midX: pts[Math.floor(pts.length / 2)].x,
+      midY: pts[Math.floor(pts.length / 2)].y,
+      midZ: pts[Math.floor(pts.length / 2)].z,
+      speedLimit: isStraight ? (cell.isBridge ? 14.5 : 10.8) : 6.8
+    };
+    inP.outEdges.push(edge);
+    outP.inEdges.push(edge);
+    allCarEdges.push(edge);
+  };
+
+  for (const [cellKey, inList] of inPassagesByCell.entries()) {
+    const cell = roadGrid.get(cellKey);
+    const outList = outPassagesByCell.get(cellKey);
+    if (!cell || !outList) continue;
+    for (let i = 0; i < inList.length; i++) {
+      const inP = inList[i];
+      const oppD = CARDINAL_DIRS[inP.dIdx].opp;
+      let addedNonUTurn = 0;
+      for (let j = 0; j < outList.length; j++) {
+        const outP = outList[j];
+        if (outP.dIdx === oppD) continue;
+        const prevCount = inP.outEdges.length;
+        addCarEdge(inP, outP, cell);
+        if (inP.outEdges.length > prevCount) addedNonUTurn++;
+      }
+      if (addedNonUTurn === 0 && !cell.is2 && !cell.isBridge) {
+        for (let j = 0; j < outList.length; j++) {
+          const outP = outList[j];
+          if (outP.dIdx === oppD) addCarEdge(inP, outP, cell);
+        }
+      }
+    }
+  }
+
+  // Poda iterativa de becos sem saída para nenhum veículo travar
+  let pruned = true;
+  while (pruned) {
+    pruned = false;
+    for (const p of passages.values()) {
+      if (p.outEdges.length === 0 && p.inEdges.length > 0) {
+        for (let i = 0; i < p.inEdges.length; i++) {
+          const deadEdge = p.inEdges[i];
+          deadEdge.dead = true;
+          const idx = deadEdge.from.outEdges.indexOf(deadEdge);
+          if (idx !== -1) deadEdge.from.outEdges.splice(idx, 1);
+        }
+        p.inEdges.length = 0;
+        pruned = true;
+      }
+    }
+  }
+  const activeCarEdges = allCarEdges.filter((e) => !e.dead);
+
+  // 2) Construir grafo de calçadas contínuo (±6.25m da borda externa das ruas)
+  const pedNodes = [];
+  const pedGridHash = new Map();
+  const rawSidewalkSegs = [];
+
+  for (const cell of roadGrid.values()) {
+    if (cell.isBridge) continue; // pedestres apenas em calçadas urbanas
+    const hasN = roadGrid.has(`${cell.ix}:${cell.iz - 1}`);
+    const hasS = roadGrid.has(`${cell.ix}:${cell.iz + 1}`);
+    const hasW = roadGrid.has(`${cell.ix - 1}:${cell.iz}`);
+    const hasE = roadGrid.has(`${cell.ix + 1}:${cell.iz}`);
+
+    if (hasN || hasS) {
+      for (const sx of [-1, 1]) {
+        if (!roadGrid.has(`${cell.ix + sx}:${cell.iz}`)) {
+          const px = cell.cx + sx * 6.25;
+          const z0 = cell.cz - 6.35;
+          const z1 = cell.cz + 6.35;
+          if (segClear(px, z0, px, z1, cell.y, 0.45)) {
+            const y0 = sampler.sample(px, z0, cell.y);
+            const y1 = sampler.sample(px, z1, cell.y);
+            if (y0 !== null && y1 !== null && Math.abs(y0 - y1) < 3.5) {
+              rawSidewalkSegs.push({ x0: px, y0, z0, x1: px, y1, z1 });
+            }
+          }
+        }
+      }
+    }
+    if (hasW || hasE) {
+      for (const sz of [-1, 1]) {
+        if (!roadGrid.has(`${cell.ix}:${cell.iz + sz}`)) {
+          const pz = cell.cz + sz * 6.25;
+          const x0 = cell.cx - 6.35;
+          const x1 = cell.cx + 6.35;
+          if (segClear(x0, pz, x1, pz, cell.y, 0.45)) {
+            const y0 = sampler.sample(x0, pz, cell.y);
+            const y1 = sampler.sample(x1, pz, cell.y);
+            if (y0 !== null && y1 !== null && Math.abs(y0 - y1) < 3.5) {
+              rawSidewalkSegs.push({ x0, y0, z0: pz, x1, y1, z1: pz });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const getOrCreatePedNode = (x, y, z) => {
+    const gx = Math.round(x * 0.5);
+    const gz = Math.round(z * 0.5);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const bucket = pedGridHash.get(`${gx + dx}:${gz + dz}`);
+        if (!bucket) continue;
+        for (let i = 0; i < bucket.length; i++) {
+          const nd = pedNodes[bucket[i]];
+          if (Math.hypot(nd.x - x, nd.z - z) < 0.7 && Math.abs(nd.y - y) < 1.2) {
+            return nd.id;
+          }
+        }
+      }
+    }
+    const id = pedNodes.length;
+    pedNodes.push({ id, x, y, z, neighbors: [] });
+    const k = `${gx}:${gz}`;
+    if (!pedGridHash.has(k)) pedGridHash.set(k, []);
+    pedGridHash.get(k).push(id);
+    return id;
+  };
+
+  const linkPedNodes = (a, b) => {
+    if (a === b) return;
+    if (!pedNodes[a].neighbors.includes(b)) pedNodes[a].neighbors.push(b);
+    if (!pedNodes[b].neighbors.includes(a)) pedNodes[b].neighbors.push(a);
+  };
+
+  for (let i = 0; i < rawSidewalkSegs.length; i++) {
+    const s = rawSidewalkSegs[i];
+    const n0 = getOrCreatePedNode(s.x0, s.y0, s.z0);
+    const n1 = getOrCreatePedNode(s.x1, s.y1, s.z1);
+    linkPedNodes(n0, n1);
+  }
+
+  // Costura esquinas e junções de calçada próximas (até 3.5m, nunca atravessa pista de 10m+)
+  for (let i = 0; i < pedNodes.length; i++) {
+    const a = pedNodes[i];
+    const gx = Math.round(a.x * 0.5);
+    const gz = Math.round(a.z * 0.5);
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        const bucket = pedGridHash.get(`${gx + dx}:${gz + dz}`);
+        if (!bucket) continue;
+        for (let bIdx = 0; bIdx < bucket.length; bIdx++) {
+          const j = bucket[bIdx];
+          if (j <= i) continue;
+          const b = pedNodes[j];
+          const dist = Math.hypot(a.x - b.x, a.z - b.z);
+          if (dist > 0.5 && dist <= 3.5 && Math.abs(a.y - b.y) < 1.3) {
+            if (segClear(a.x, a.z, b.x, b.z, (a.y + b.y) * 0.5, 0.35)) {
+              linkPedNodes(i, j);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Filtrar apenas nós conectados a calçadas reais (grau >= 1)
+  const walkPedNodes = pedNodes.filter((n) => n.neighbors.length > 0);
+
+  console.log(
+    `Grafo San Francisco: ${roadGrid.size} quadras viárias, ${activeCarEdges.length} faixas contínuas, ${walkPedNodes.length} nós de calçada.`
+  );
+  return { sampler, carEdges: activeCarEdges, pedNodes: pedNodes, walkPedNodes };
+}
+
+function buildNormalizedStaticCarTemplate(gltfScene, cfg, shadowTex, glowTex) {
+  const alignPivot = new THREE.Group();
+  gltfScene.rotation.y = cfg.yawOffset;
+  alignPivot.add(gltfScene);
+  alignPivot.updateMatrixWorld(true);
+
+  const rawBox = new THREE.Box3();
+  const tmpBox = new THREE.Box3();
+  alignPivot.traverse((ch) => {
+    if (ch.isMesh && ch.geometry) {
+      if (!ch.geometry.boundingBox) ch.geometry.computeBoundingBox();
+      tmpBox.copy(ch.geometry.boundingBox).applyMatrix4(ch.matrixWorld);
+      rawBox.union(tmpBox);
+    }
+  });
+
+  const rawSize = new THREE.Vector3();
+  const rawCenter = new THREE.Vector3();
+  rawBox.getSize(rawSize);
+  rawBox.getCenter(rawCenter);
+
+  const uniScale = cfg.targetLen / Math.max(0.5, rawSize.z);
+  gltfScene.scale.multiplyScalar(uniScale);
+  gltfScene.position.set(-rawCenter.x * uniScale, -rawBox.min.y * uniScale, -rawCenter.z * uniScale);
+  alignPivot.updateMatrixWorld(true);
+
+  const finalBox = new THREE.Box3();
+  alignPivot.traverse((ch) => {
+    if (ch.isMesh && ch.geometry) {
+      ch.geometry.computeBoundingBox();
+      tmpBox.copy(ch.geometry.boundingBox).applyMatrix4(ch.matrixWorld);
+      finalBox.union(tmpBox);
+    }
+  });
+  const finalSize = new THREE.Vector3();
+  finalBox.getSize(finalSize);
+
+  // Static batching por material para manter draw calls mínimos mesmo no tráfego ALTO
+  const buckets = new Map();
+  const vPos = new THREE.Vector3();
+  const vNorm = new THREE.Vector3();
+  const normalMat = new THREE.Matrix3();
+
+  alignPivot.traverse((ch) => {
+    if (!ch.isMesh || !ch.geometry || !ch.material) return;
+    const geom = ch.geometry;
+    const pos = geom.attributes.position;
+    if (!pos) return;
+    const norm = geom.attributes.normal;
+    const uv = geom.attributes.uv;
+    const idx = geom.index;
+    const mats = Array.isArray(ch.material) ? ch.material : [ch.material];
+
+    const addGroupToBucket = (mat, start, count) => {
+      if (!mat) return;
+      if (mat.map) mat.map.anisotropy = 1;
+      let b = buckets.get(mat);
+      if (!b) {
+        b = { material: mat, parts: [], totalVerts: 0, totalIndices: 0, hasUv: true };
+        buckets.set(mat, b);
+      }
+      if (!uv) b.hasUv = false;
+      const triCount = Math.floor(count / 3);
+      if (triCount <= 0) return;
+      b.parts.push({ mesh: ch, geom, pos, norm, uv, idx, start, count: triCount * 3 });
+      b.totalVerts += pos.count;
+      b.totalIndices += triCount * 3;
+    };
+
+    if (geom.groups && geom.groups.length > 0 && mats.length > 1) {
+      geom.groups.forEach((g) => {
+        const mat = mats[Math.min(g.materialIndex || 0, mats.length - 1)];
+        const count = g.count === Infinity ? (idx ? idx.count : pos.count) - g.start : g.count;
+        addGroupToBucket(mat, g.start, count);
+      });
+    } else {
+      addGroupToBucket(mats[0], 0, idx ? idx.count : pos.count);
+    }
+  });
+
+  const mergedParts = [];
+  buckets.forEach((b) => {
+    if (b.totalIndices === 0) return;
+    const posArr = new Float32Array(b.totalVerts * 3);
+    const normArr = new Float32Array(b.totalVerts * 3);
+    const uvArr = b.hasUv ? new Float32Array(b.totalVerts * 2) : null;
+    const useU32 = b.totalVerts > 65535;
+    const idxArr = useU32 ? new Uint32Array(b.totalIndices) : new Uint16Array(b.totalIndices);
+
+    let vCursor = 0;
+    let iCursor = 0;
+    const seenGeoms = new Map();
+
+    b.parts.forEach((part) => {
+      const cacheKey = part.mesh.uuid;
+      let baseV = seenGeoms.get(cacheKey);
+      if (baseV === undefined) {
+        baseV = vCursor;
+        seenGeoms.set(cacheKey, baseV);
+        const wm = part.mesh.matrixWorld;
+        normalMat.getNormalMatrix(wm);
+        for (let v = 0; v < part.pos.count; v++) {
+          vPos.fromBufferAttribute(part.pos, v).applyMatrix4(wm);
+          const o3 = (vCursor + v) * 3;
+          posArr[o3] = vPos.x;
+          posArr[o3 + 1] = vPos.y;
+          posArr[o3 + 2] = vPos.z;
+          if (part.norm) {
+            vNorm.fromBufferAttribute(part.norm, v).applyMatrix3(normalMat).normalize();
+            normArr[o3] = vNorm.x;
+            normArr[o3 + 1] = vNorm.y;
+            normArr[o3 + 2] = vNorm.z;
+          } else {
+            normArr[o3 + 1] = 1;
+          }
+          if (uvArr && part.uv) {
+            const o2 = (vCursor + v) * 2;
+            uvArr[o2] = part.uv.getX(v);
+            uvArr[o2 + 1] = part.uv.getY(v);
+          }
+        }
+        vCursor += part.pos.count;
+      }
+
+      const isMirrored = part.mesh.matrixWorld.determinant() < 0;
+      const triTotal = part.count / 3;
+      for (let t = 0; t < triTotal; t++) {
+        const s0 = part.start + t * 3;
+        const a = baseV + (part.idx ? part.idx.getX(s0) : s0);
+        const bb = baseV + (part.idx ? part.idx.getX(s0 + 1) : s0 + 1);
+        const c = baseV + (part.idx ? part.idx.getX(s0 + 2) : s0 + 2);
+        if (isMirrored) {
+          idxArr[iCursor++] = a;
+          idxArr[iCursor++] = c;
+          idxArr[iCursor++] = bb;
+        } else {
+          idxArr[iCursor++] = a;
+          idxArr[iCursor++] = bb;
+          idxArr[iCursor++] = c;
+        }
+      }
+    });
+
+    const trimmedPos = posArr.subarray(0, vCursor * 3);
+    const trimmedNorm = normArr.subarray(0, vCursor * 3);
+    const mergedGeom = new THREE.BufferGeometry();
+    mergedGeom.setAttribute('position', new THREE.BufferAttribute(trimmedPos, 3));
+    mergedGeom.setAttribute('normal', new THREE.BufferAttribute(trimmedNorm, 3));
+    if (uvArr) mergedGeom.setAttribute('uv', new THREE.BufferAttribute(uvArr.subarray(0, vCursor * 2), 2));
+    mergedGeom.setIndex(new THREE.BufferAttribute(idxArr, 1));
+    mergedGeom.computeBoundingSphere();
+    mergedParts.push({ geom: mergedGeom, mat: b.material });
+  });
+
+  const shadowGeom = new THREE.PlaneGeometry(finalSize.x * 1.18, finalSize.z * 1.06);
+  shadowGeom.rotateX(-Math.PI / 2);
+  const shadowMat = new THREE.MeshBasicMaterial({
+    map: shadowTex,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1
+  });
+
+  const headMat = new THREE.SpriteMaterial({ map: glowTex, color: 0xfff3d1, transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false });
+  const tailMat = new THREE.SpriteMaterial({ map: glowTex, color: 0xff2211, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false });
+
+  return {
+    key: cfg.key,
+    width: finalSize.x,
+    height: finalSize.y,
+    length: finalSize.z,
+    spawnInstance() {
+      const root = new THREE.Group();
+      for (let i = 0; i < mergedParts.length; i++) {
+        const m = new THREE.Mesh(mergedParts[i].geom, mergedParts[i].mat);
+        m.castShadow = false;
+        m.receiveShadow = false;
+        root.add(m);
+      }
+      const shadow = new THREE.Mesh(shadowGeom, shadowMat);
+      shadow.position.y = 0.04;
+      root.add(shadow);
+
+      const hw = finalSize.x * 0.34;
+      const hl = finalSize.z * 0.49;
+      const hy = finalSize.y * 0.40;
+      const ty = finalSize.y * 0.46;
+
+      const makeGlow = (mat, x, y, z, sc) => {
+        const sp = new THREE.Sprite(mat);
+        sp.position.set(x, y, z);
+        sp.scale.set(sc, sc * 0.65, 1);
+        root.add(sp);
+        return sp;
+      };
+      const headMatInst = headMat.clone();
+      const tailMatInst = tailMat.clone();
+      makeGlow(headMatInst, -hw, hy, -hl, 0.85);
+      makeGlow(headMatInst, hw, hy, -hl, 0.85);
+      makeGlow(tailMatInst, -hw, ty, hl, 0.72);
+      makeGlow(tailMatInst, hw, ty, hl, 0.72);
+
+      return { root, headMat: headMatInst, tailMat: tailMatInst };
+    }
+  };
+}
+
+function buildNormalizedPedestrianTemplate(gltf, cfg, shadowTex) {
+  const source = gltf.scene;
+  const rawClips = gltf.animations || [];
+
+  // Zera deriva horizontal XZ no root/quadril (necessário para clipes Mixamo in-situ)
+  const clips = rawClips.map((clip) => {
+    const clonedClip = clip.clone();
+    clonedClip.tracks.forEach((tr) => {
+      if (tr.name.endsWith('.position')) {
+        const vals = tr.values;
+        if (vals.length >= 6) {
+          let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+          for (let i = 0; i < vals.length; i += 3) {
+            if (vals[i] < minX) minX = vals[i];
+            if (vals[i] > maxX) maxX = vals[i];
+            if (vals[i + 2] < minZ) minZ = vals[i + 2];
+            if (vals[i + 2] > maxZ) maxZ = vals[i + 2];
+          }
+          if (cfg.stripRootXZ || (maxX - minX) > 0.45 || (maxZ - minZ) > 0.45) {
+            const x0 = vals[0];
+            const z0 = vals[2];
+            for (let i = 0; i < vals.length; i += 3) {
+              vals[i] = x0;
+              vals[i + 2] = z0;
+            }
+          }
+        }
+      }
+    });
+    return clonedClip;
+  });
+
+  const walkClip = clips.find((c) => /walk/i.test(c.name)) || clips[0] || null;
+  const runClip = clips.find((c) => /run/i.test(c.name)) || walkClip;
+  const idleClip = clips.find((c) => /idle/i.test(c.name)) || walkClip;
+
+  // Testar bounding ósseo após 1 passo de animação para normalizar altura (~1.72m) e eixo vertical
+  const testClone = SkeletonUtils.clone(source);
+  const inner = new THREE.Group();
+  inner.add(testClone);
+  const testWrap = new THREE.Group();
+  testWrap.add(inner);
+
+  const measureBones = () => {
+    testWrap.updateMatrixWorld(true);
+    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9, minZ = 1e9, maxZ = -1e9;
+    let count = 0;
+    let centerBone = null;
+    const bp = new THREE.Vector3();
+    testClone.traverse((ch) => {
+      if (!ch.isBone) return;
+      const nm = (ch.name || '').toLowerCase();
+      if (/poletarget|cam_driver|ik_driver|^pt\.|weapon_bone/.test(nm)) return;
+      ch.getWorldPosition(bp);
+      if (bp.x < minX) minX = bp.x;
+      if (bp.x > maxX) maxX = bp.x;
+      if (bp.y < minY) minY = bp.y;
+      if (bp.y > maxY) maxY = bp.y;
+      if (bp.z < minZ) minZ = bp.z;
+      if (bp.z > maxZ) maxZ = bp.z;
+      if (!centerBone && /hips|pelvis/.test(nm)) {
+        centerBone = bp.clone();
+      }
+      count++;
+    });
+    return { minX, maxX, minY, maxY, minZ, maxZ, count, centerBone };
+  };
+
+  if (walkClip) {
+    const tmpMixer = new THREE.AnimationMixer(testClone);
+    tmpMixer.clipAction(walkClip).play();
+    tmpMixer.update(0.08);
+  }
+  let bm = measureBones();
+  let extraRotX = 0;
+  if (bm.count > 0 && (bm.maxY - bm.minY) < (bm.maxZ - bm.minZ) * 0.75) {
+    extraRotX = Math.PI / 2;
+    inner.rotation.x = extraRotX;
+    bm = measureBones();
+  }
+  const spanY = Math.max(0.2, bm.maxY - bm.minY);
+  const normScale = 1.72 / (spanY * 1.03);
+  inner.scale.setScalar(normScale);
+  bm = measureBones();
+  const footPadY = 0.015;
+  const offX = bm.centerBone ? -bm.centerBone.x : -(bm.minX + bm.maxX) * 0.5;
+  const offY = -bm.minY + footPadY;
+  const offZ = bm.centerBone ? -bm.centerBone.z : -(bm.minZ + bm.maxZ) * 0.5;
+
+  const shadowGeom = new THREE.PlaneGeometry(0.76, 0.76);
+  shadowGeom.rotateX(-Math.PI / 2);
+  const shadowMat = new THREE.MeshBasicMaterial({
+    map: shadowTex,
+    transparent: true,
+    opacity: 0.58,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1
+  });
+
+  return {
+    key: cfg.key,
+    spawnInstance() {
+      const root = new THREE.Group();
+      const charInner = new THREE.Group();
+      charInner.rotation.x = extraRotX;
+      charInner.scale.setScalar(normScale);
+      charInner.position.set(offX, offY, offZ);
+
+      const rig = SkeletonUtils.clone(source);
+      rig.traverse((ch) => {
+        if (ch.isMesh) {
+          ch.castShadow = false;
+          ch.receiveShadow = false;
+          ch.frustumCulled = false;
+          if (ch.material && ch.material.map) ch.material.map.anisotropy = 1;
+        }
+      });
+      charInner.add(rig);
+      root.add(charInner);
+
+      const shadow = new THREE.Mesh(shadowGeom, shadowMat);
+      shadow.position.y = 0.03;
+      root.add(shadow);
+
+      const mixer = new THREE.AnimationMixer(rig);
+      const walkAction = walkClip ? mixer.clipAction(walkClip) : null;
+      const runAction = runClip ? mixer.clipAction(runClip) : walkAction;
+      const idleAction = idleClip ? mixer.clipAction(idleClip) : walkAction;
+      if (walkAction) {
+        walkAction.play();
+        mixer.update(Math.random() * Math.max(0.5, walkClip.duration));
+      }
+
+      return { root, mixer, walkAction, runAction, idleAction, activeAction: walkAction };
+    }
+  };
+}
+
+class CityTrafficManager {
+  constructor() {
+    this.initialized = false;
+    this.nav = null;
+    this.carTemplates = [];
+    this.pedTemplates = [];
+    this.carPool = [];
+    this.pedPool = [];
+    this.physicsColliders = [];
+    this.flowPreset = TRAFFIC_FLOW_PRESETS[state.trafficFlow] || TRAFFIC_FLOW_PRESETS.medium;
+    this.group = new THREE.Group();
+    this.group.name = 'CityTrafficAndPedestrians';
+    this.frameCounter = 0;
+    this._carPosMap = new Map();
+    this._dummyQuat = new THREE.Quaternion();
+    this._dummyEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+    this._carForward = new THREE.Vector3();
+    this._frustum = new THREE.Frustum();
+    this._projScreen = new THREE.Matrix4();
+  }
+
+  async loadAssetsAndBuild(cityRoot, world, chassisMat, loader, onProgress) {
+    this.nav = buildCityNavigationGraphs(cityRoot);
+    const shadowTex = createSoftBlobShadowTexture();
+    const glowTex = createLightGlowSpriteTexture();
+
+    const totalAssets = TRAFFIC_CAR_CONFIGS.length + PEDESTRIAN_CONFIGS.length;
+    let doneCount = 0;
+
+    const loadOne = (url) => new Promise((res, rej) => loader.load(url, res, undefined, rej));
+
+    for (const cfg of TRAFFIC_CAR_CONFIGS) {
+      const gltf = await loadOne(cfg.url);
+      this.carTemplates.push(buildNormalizedStaticCarTemplate(gltf.scene, cfg, shadowTex, glowTex));
+      doneCount++;
+      if (onProgress) onProgress(doneCount / totalAssets);
+    }
+
+    for (const cfg of PEDESTRIAN_CONFIGS) {
+      const gltf = await loadOne(cfg.url);
+      this.pedTemplates.push(buildNormalizedPedestrianTemplate(gltf, cfg, shadowTex));
+      doneCount++;
+      if (onProgress) onProgress(doneCount / totalAssets);
+    }
+
+    // Pré-alocar pool máximo (HIGH) e ativar apenas até flowPreset.maxCars/maxPeds
+    const maxCars = TRAFFIC_FLOW_PRESETS.high.maxCars;
+    const maxPeds = TRAFFIC_FLOW_PRESETS.high.maxPeds;
+
+    for (let i = 0; i < maxCars; i++) {
+      const tpl = this.carTemplates[i % this.carTemplates.length];
+      const inst = tpl.spawnInstance();
+      inst.root.visible = false;
+      this.group.add(inst.root);
+      this.carPool.push({
+        id: i,
+        tpl,
+        ...inst,
+        active: false,
+        edge: null,
+        dist: 0,
+        speed: 0,
+        baseSpeed: 8.5 + (i % 5) * 0.7,
+        braking: false,
+        pos: new THREE.Vector3(0, -500, 0),
+        yaw: 0,
+        pitch: 0,
+        knockTimer: 0,
+        knockVx: 0,
+        knockVz: 0,
+        knockYawVel: 0,
+        collider: null
+      });
+    }
+
+    for (let i = 0; i < maxPeds; i++) {
+      const tpl = this.pedTemplates[i % this.pedTemplates.length];
+      const inst = tpl.spawnInstance();
+      inst.root.visible = false;
+      this.group.add(inst.root);
+      this.pedPool.push({
+        id: i,
+        ...inst,
+        active: false,
+        curNode: null,
+        nextNode: null,
+        t: 0,
+        segLen: 1,
+        baseSpeed: 1.32 + (i % 6) * 0.08,
+        speed: 1.4,
+        pos: new THREE.Vector3(0, -500, 0),
+        yaw: 0,
+        dodgeOffsetX: 0,
+        dodgeOffsetZ: 0,
+        running: false,
+        tumbleTimer: 0,
+        tumbleVx: 0,
+        tumbleVy: 0,
+        tumbleVz: 0
+      });
+    }
+
+    // 6 corpos cinemáticos leves compartilhados apenas com os carros próximos ao Corsa
+    const boxShape = new CANNON.Box(new CANNON.Vec3(0.95, 0.68, 2.05));
+    for (let i = 0; i < 6; i++) {
+      const body = new CANNON.Body({
+        mass: 0,
+        type: CANNON.Body.KINEMATIC,
+        material: chassisMat,
+        collisionFilterGroup: COLLISION_TRAFFIC,
+        collisionFilterMask: COLLISION_CHASSIS
+      });
+      body.addShape(boxShape, new CANNON.Vec3(0, 0.72, 0));
+      body.position.set(0, -500, 0);
+      body.userData = { trafficCar: null };
+      world.addBody(body);
+      this.physicsColliders.push(body);
+    }
+
+    scene.add(this.group);
+    this.initialized = true;
+    this.setFlowPreset(this.flowPreset);
+  }
+
+  setFlowPreset(preset) {
+    this.flowPreset = preset || TRAFFIC_FLOW_PRESETS.medium;
+    if (!this.initialized) return;
+
+    const px = chassisBody ? chassisBody.position.x : SPAWN_POINTS[state.spawnIdx].x;
+    const py = chassisBody ? chassisBody.position.y : SPAWN_POINTS[state.spawnIdx].y;
+    const pz = chassisBody ? chassisBody.position.z : SPAWN_POINTS[state.spawnIdx].z;
+
+    for (let i = 0; i < this.carPool.length; i++) {
+      const car = this.carPool[i];
+      const shouldBeActive = i < this.flowPreset.maxCars;
+      if (!shouldBeActive) {
+        car.active = false;
+        car.root.visible = false;
+        car.edge = null;
+      } else if (!car.active) {
+        car.active = true;
+        this.spawnCarNear(car, px, py, pz, true);
+      }
+    }
+
+    for (let i = 0; i < this.pedPool.length; i++) {
+      const ped = this.pedPool[i];
+      const shouldBeActive = i < this.flowPreset.maxPeds;
+      if (!shouldBeActive) {
+        ped.active = false;
+        ped.root.visible = false;
+        ped.curNode = null;
+        ped.nextNode = null;
+      } else if (!ped.active) {
+        ped.active = true;
+        this.spawnPedNear(ped, px, py, pz, true);
+      }
+    }
+  }
+
+  isEdgeOccupied(edge, ignoreCarId) {
+    for (let i = 0; i < this.carPool.length; i++) {
+      const other = this.carPool[i];
+      if (!other.active || other.id === ignoreCarId || !other.edge) continue;
+      if (other.edge.id === edge.id) return true;
+      const d = Math.hypot(other.pos.x - edge.midX, other.pos.z - edge.midZ);
+      if (d < 13.0) return true;
+    }
+    return false;
+  }
+
+  spawnCarNear(car, px, py, pz, initialSpread = false) {
+    const edges = this.nav ? this.nav.carEdges : null;
+    if (!edges || edges.length === 0) return;
+
+    const minR = initialSpread ? 22 : 60;
+    const maxR = this.flowPreset.carRadius;
+    let chosen = null;
+
+    for (let attempt = 0; attempt < 42; attempt++) {
+      const cand = edges[Math.floor(Math.random() * edges.length)];
+      const hd = Math.hypot(cand.midX - px, cand.midZ - pz);
+      if (hd < minR || hd > maxR) continue;
+      if (Math.abs(cand.midY - py) > 38) continue;
+      if (this.isEdgeOccupied(cand, car.id)) continue;
+      chosen = cand;
+      break;
+    }
+
+    if (!chosen) return;
+    car.edge = chosen;
+    car.dist = Math.random() * chosen.length * 0.7;
+    car.speed = Math.min(car.baseSpeed, chosen.speedLimit) * 0.85;
+    car.knockTimer = 0;
+    car.knockVx = 0;
+    car.knockVz = 0;
+    car.knockYawVel = 0;
+    this.evalCarPoseOnEdge(car);
+  }
+
+  evalCarPoseOnEdge(car) {
+    const e = car.edge;
+    if (!e) return;
+    const clamped = Math.max(0, Math.min(e.length, car.dist));
+    const pts = e.pts;
+    const cl = e.cumLen;
+    let seg = 0;
+    while (seg < cl.length - 2 && clamped > cl[seg + 1]) seg++;
+    const segStart = cl[seg];
+    const segSpan = Math.max(0.01, cl[seg + 1] - segStart);
+    const f = Math.max(0, Math.min(1, (clamped - segStart) / segSpan));
+    const pA = pts[seg];
+    const pB = pts[seg + 1];
+
+    const x = pA.x + (pB.x - pA.x) * f;
+    const z = pA.z + (pB.z - pA.z) * f;
+    const baseY = pA.y + (pB.y - pA.y) * f;
+    const sampledY = this.nav.sampler.sample(x, z, baseY);
+    const y = sampledY !== null ? sampledY : baseY;
+
+    const dx = pB.x - pA.x;
+    const dz = pB.z - pA.z;
+    const horizLen = Math.max(0.01, Math.hypot(dx, dz));
+    // Modelo com frente em -Z => atan2(-dx, -dz) alinha -Z local ao vetor (dx, dz)
+    const targetYaw = Math.atan2(-dx, -dz);
+    const targetPitch = Math.atan2(pB.y - pA.y, horizLen);
+
+    if (car.pos.y < -100) {
+      car.yaw = targetYaw;
+      car.pitch = targetPitch;
+    } else {
+      let dyaw = targetYaw - car.yaw;
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      car.yaw += dyaw * 0.32;
+      car.pitch += (targetPitch - car.pitch) * 0.25;
+    }
+    car.pos.set(x, y, z);
+  }
+
+  spawnPedNear(ped, px, py, pz, initialSpread = false) {
+    const nodes = this.nav ? this.nav.walkPedNodes : null;
+    if (!nodes || nodes.length === 0) return;
+
+    const minR = initialSpread ? 12 : 34;
+    const maxR = this.flowPreset.pedRadius;
+    let chosen = null;
+
+    for (let attempt = 0; attempt < 36; attempt++) {
+      const cand = nodes[Math.floor(Math.random() * nodes.length)];
+      const hd = Math.hypot(cand.x - px, cand.z - pz);
+      if (hd < minR || hd > maxR) continue;
+      if (Math.abs(cand.y - py) > 32) continue;
+      chosen = cand;
+      break;
+    }
+    if (!chosen || chosen.neighbors.length === 0) return;
+
+    ped.curNode = chosen;
+    const nxtId = chosen.neighbors[Math.floor(Math.random() * chosen.neighbors.length)];
+    ped.nextNode = this.nav.pedNodes[nxtId];
+    ped.t = Math.random() * 0.85;
+    ped.segLen = Math.max(0.5, Math.hypot(ped.nextNode.x - ped.curNode.x, ped.nextNode.z - ped.curNode.z));
+    ped.speed = ped.baseSpeed;
+    ped.dodgeOffsetX = 0;
+    ped.dodgeOffsetZ = 0;
+    ped.tumbleTimer = 0;
+    ped.running = false;
+    ped.pos.set(
+      ped.curNode.x + (ped.nextNode.x - ped.curNode.x) * ped.t,
+      ped.curNode.y + (ped.nextNode.y - ped.curNode.y) * ped.t,
+      ped.curNode.z + (ped.nextNode.z - ped.curNode.z) * ped.t
+    );
+    ped.yaw = Math.atan2(ped.nextNode.x - ped.curNode.x, ped.nextNode.z - ped.curNode.z);
+  }
+
+  setPedAction(ped, targetAction, fadeSec = 0.2) {
+    if (!targetAction || ped.activeAction === targetAction) return;
+    targetAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
+    if (ped.activeAction) {
+      ped.activeAction.crossFadeTo(targetAction, fadeSec, true);
+    }
+    ped.activeAction = targetAction;
+  }
+
+  handleCorsaCollision(event) {
+    if (!this.initialized || !event || !event.body || !event.body.userData) return;
+    const car = event.body.userData.trafficCar;
+    if (!car || !car.active || !chassisBody) return;
+
+    const dx = car.pos.x - chassisBody.position.x;
+    const dz = car.pos.z - chassisBody.position.z;
+    const dist = Math.max(0.5, Math.hypot(dx, dz));
+    const corsaSpeed = Math.hypot(chassisBody.velocity.x, chassisBody.velocity.z);
+    const impact = Math.max(4.5, Math.min(20.0, corsaSpeed * 0.88));
+
+    car.knockVx = (dx / dist) * impact + chassisBody.velocity.x * 0.42;
+    car.knockVz = (dz / dist) * impact + chassisBody.velocity.z * 0.42;
+    car.knockYawVel = ((dx * chassisBody.velocity.z - dz * chassisBody.velocity.x) >= 0 ? 1 : -1) * Math.min(5.0, impact * 0.35);
+    car.knockTimer = 2.4;
+    car.braking = true;
+  }
+
+  update(dt, playerBody, gameState) {
+    if (!this.initialized || !playerBody) return;
+    this.frameCounter++;
+
+    const px = playerBody.position.x;
+    const py = playerBody.position.y;
+    const pz = playerBody.position.z;
+    const pvx = playerBody.velocity.x;
+    const pvz = playerBody.velocity.z;
+    const playerSpeed = Math.hypot(pvx, pvz);
+
+    this._projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this._frustum.setFromProjectionMatrix(this._projScreen);
+
+    const isDarkHours = gameState.timeHour >= 17.5 || gameState.timeHour < 6.0;
+    const maxCarR = this.flowPreset.carRadius;
+    const maxPedR = this.flowPreset.pedRadius;
+
+    // 1. Atualizar Carros de Trânsito (IA)
+    const nearCars = [];
+    for (let i = 0; i < this.carPool.length; i++) {
+      const car = this.carPool[i];
+      if (!car.active) continue;
+
+      const distToPlayer = Math.hypot(car.pos.x - px, car.pos.z - pz);
+      if (!car.edge || distToPlayer > maxCarR * 1.18 || Math.abs(car.pos.y - py) > 42) {
+        this.spawnCarNear(car, px, py, pz, false);
+        if (!car.edge) {
+          car.root.visible = false;
+          continue;
+        }
+      }
+
+      if (car.knockTimer > 0) {
+        car.knockTimer -= dt;
+        car.pos.x += car.knockVx * dt;
+        car.pos.z += car.knockVz * dt;
+        const damp = Math.exp(-3.2 * dt);
+        car.knockVx *= damp;
+        car.knockVz *= damp;
+        car.yaw += car.knockYawVel * dt;
+        car.knockYawVel *= damp;
+        const sy = this.nav.sampler.sample(car.pos.x, car.pos.z, car.pos.y);
+        if (sy !== null) car.pos.y = sy;
+        car.braking = true;
+        if (car.knockTimer <= 0 && distToPlayer > 28) {
+          this.spawnCarNear(car, px, py, pz, false);
+        }
+      } else {
+        // Direção atual para frente (-Z local rotacionado por yaw)
+        const fwdX = -Math.sin(car.yaw);
+        const fwdZ = -Math.cos(car.yaw);
+
+        let targetSpeed = Math.min(car.baseSpeed, car.edge.speedLimit);
+        let braking = false;
+
+        // Frear se o Corsa estiver na frente na mesma trajetória
+        if (distToPlayer < 24.0 && Math.abs(py - car.pos.y) < 3.0) {
+          const rx = px - car.pos.x;
+          const rz = pz - car.pos.z;
+          const lon = rx * fwdX + rz * fwdZ;
+          const lat = Math.abs(-rx * fwdZ + rz * fwdX);
+          if (lon > 0.5 && lon < 21.0 && lat < 2.55) {
+            targetSpeed = lon < 7.5 ? 0 : targetSpeed * Math.max(0, (lon - 7.5) / 13.5);
+            braking = true;
+          }
+        }
+
+        // Frear se houver outro carro IA à frente na faixa
+        for (let j = 0; j < this.carPool.length; j++) {
+          if (j === i) continue;
+          const other = this.carPool[j];
+          if (!other.active || !other.edge) continue;
+          if (Math.abs(other.pos.y - car.pos.y) > 3.0) continue;
+          const rx = other.pos.x - car.pos.x;
+          const rz = other.pos.z - car.pos.z;
+          const dSq = rx * rx + rz * rz;
+          if (dSq > 360) continue; // > 19m
+          const lon = rx * fwdX + rz * fwdZ;
+          const lat = Math.abs(-rx * fwdZ + rz * fwdX);
+          if (lon > 1.0 && lon < 18.0 && lat < 2.2) {
+            const headingDot = fwdX * -Math.sin(other.yaw) + fwdZ * -Math.cos(other.yaw);
+            if (headingDot > 0.35) {
+              const safeSpd = lon < 7.0 ? 0 : Math.min(targetSpeed, other.speed * ((lon - 6.0) / 12.0));
+              if (safeSpd < targetSpeed) {
+                targetSpeed = safeSpd;
+                braking = true;
+              }
+            }
+          }
+        }
+
+        const accelRate = targetSpeed < car.speed ? 12.0 : 4.2;
+        car.speed += (targetSpeed - car.speed) * Math.min(1, accelRate * dt);
+        if (car.speed < 0.08) car.speed = 0;
+        car.braking = braking || car.speed < 1.2;
+
+        car.dist += car.speed * dt;
+        if (car.dist >= car.edge.length) {
+          car.dist -= car.edge.length;
+          const nextEdges = car.edge.to.outEdges;
+          if (nextEdges && nextEdges.length > 0) {
+            // Preferir seguir reto (~65%) ou fazer curva suave
+            const curD = car.edge.to.dIdx;
+            const straight = nextEdges.find((e) => !e.isTurn);
+            if (straight && Math.random() < 0.65) {
+              car.edge = straight;
+            } else {
+              car.edge = nextEdges[Math.floor(Math.random() * nextEdges.length)];
+            }
+          } else {
+            this.spawnCarNear(car, px, py, pz, false);
+          }
+        }
+        if (car.edge) this.evalCarPoseOnEdge(car);
+      }
+
+      // Atualizar mesh e luzes (com frustum & alcance culling para 60fps constantes)
+      const renderDist = Math.hypot(car.pos.x - px, car.pos.z - pz);
+      const visibleNow = renderDist < maxCarR * 1.1 && (renderDist < 30 || this._frustum.containsPoint(car.pos));
+      car.root.visible = visibleNow;
+      if (visibleNow) {
+        car.root.position.copy(car.pos);
+        car.root.rotation.set(car.pitch, car.yaw, 0, 'YXZ');
+        car.headMat.opacity = isDarkHours ? 0.72 : 0.0;
+        car.tailMat.opacity = car.braking ? 0.92 : (isDarkHours ? 0.45 : 0.08);
+      }
+
+      if (renderDist < 38.0) {
+        nearCars.push({ car, dist: renderDist });
+      }
+    }
+
+    // Vincular os 6 corpos físicos cinemáticos aos 6 carros mais próximos do jogador
+    nearCars.sort((a, b) => a.dist - b.dist);
+    for (let k = 0; k < this.physicsColliders.length; k++) {
+      const col = this.physicsColliders[k];
+      if (k < nearCars.length) {
+        const tc = nearCars[k].car;
+        col.userData.trafficCar = tc;
+        col.position.set(tc.pos.x, tc.pos.y, tc.pos.z);
+        this._dummyEuler.set(tc.pitch, tc.yaw, 0, 'YXZ');
+        this._dummyQuat.setFromEuler(this._dummyEuler);
+        col.quaternion.set(this._dummyQuat.x, this._dummyQuat.y, this._dummyQuat.z, this._dummyQuat.w);
+      } else {
+        col.userData.trafficCar = null;
+        col.position.set(0, -500, 0);
+      }
+    }
+
+    // 2. Atualizar Pedestres nas Calçadas
+    for (let i = 0; i < this.pedPool.length; i++) {
+      const ped = this.pedPool[i];
+      if (!ped.active) continue;
+
+      const distToPlayer = Math.hypot(ped.pos.x - px, ped.pos.z - pz);
+      if (!ped.curNode || !ped.nextNode || distToPlayer > maxPedR * 1.18 || Math.abs(ped.pos.y - py) > 36) {
+        this.spawnPedNear(ped, px, py, pz, false);
+        if (!ped.curNode) {
+          ped.root.visible = false;
+          continue;
+        }
+      }
+
+      if (ped.tumbleTimer > 0) {
+        ped.tumbleTimer -= dt;
+        ped.pos.x += ped.tumbleVx * dt;
+        ped.pos.z += ped.tumbleVz * dt;
+        ped.pos.y = Math.max(ped.curNode.y, ped.pos.y + ped.tumbleVy * dt);
+        ped.tumbleVy -= 15.0 * dt;
+        ped.tumbleVx *= Math.exp(-3.0 * dt);
+        ped.tumbleVz *= Math.exp(-3.0 * dt);
+        if (ped.tumbleTimer <= 0 && distToPlayer > 22) {
+          this.spawnPedNear(ped, px, py, pz, false);
+        }
+      } else {
+        // Detectar colisão leve com o Corsa
+        if (distToPlayer < 1.65 && Math.abs(py - ped.pos.y) < 1.8 && playerSpeed > 1.8) {
+          const rx = ped.pos.x - px;
+          const rz = ped.pos.z - pz;
+          const rLen = Math.max(0.2, Math.hypot(rx, rz));
+          ped.tumbleVx = (rx / rLen) * Math.min(9.0, playerSpeed * 0.65) + pvx * 0.35;
+          ped.tumbleVz = (rz / rLen) * Math.min(9.0, playerSpeed * 0.65) + pvz * 0.35;
+          ped.tumbleVy = 3.8;
+          ped.tumbleTimer = 1.6;
+        } else {
+          // Desviar rapidamente se o Corsa se aproximar rápido
+          let dangerNear = false;
+          if (distToPlayer < 10.5 && playerSpeed > 3.2 && Math.abs(py - ped.pos.y) < 2.2) {
+            const toPedX = ped.pos.x - px;
+            const toPedZ = ped.pos.z - pz;
+            const approachDot = (toPedX * pvx + toPedZ * pvz) / (distToPlayer * playerSpeed + 0.001);
+            if (approachDot > 0.25) {
+              dangerNear = true;
+              const sideX = -pvz / playerSpeed;
+              const sideZ = pvx / playerSpeed;
+              const sign = (toPedX * sideX + toPedZ * sideZ) >= 0 ? 1 : -1;
+              ped.dodgeOffsetX += (sideX * sign * 1.5 - ped.dodgeOffsetX) * Math.min(1, 5.0 * dt);
+              ped.dodgeOffsetZ += (sideZ * sign * 1.5 - ped.dodgeOffsetZ) * Math.min(1, 5.0 * dt);
+            }
+          }
+          if (!dangerNear) {
+            ped.dodgeOffsetX *= Math.exp(-3.0 * dt);
+            ped.dodgeOffsetZ *= Math.exp(-3.0 * dt);
+          }
+
+          if (dangerNear !== ped.running) {
+            ped.running = dangerNear;
+            this.setPedAction(ped, dangerNear ? ped.runAction : ped.walkAction, 0.2);
+          }
+          const targetSpd = dangerNear ? 3.4 : ped.baseSpeed;
+          ped.speed += (targetSpd - ped.speed) * Math.min(1, 6.0 * dt);
+
+          ped.t += (ped.speed * dt) / ped.segLen;
+          if (ped.t >= 1.0) {
+            const prevId = ped.curNode.id;
+            ped.curNode = ped.nextNode;
+            const nbrs = ped.curNode.neighbors;
+            let nextId = nbrs[0];
+            if (nbrs.length > 1) {
+              const forwardNbrs = nbrs.filter((id) => id !== prevId);
+              nextId = forwardNbrs[Math.floor(Math.random() * forwardNbrs.length)];
+            }
+            ped.nextNode = this.nav.pedNodes[nextId] || ped.curNode;
+            ped.t = 0;
+            ped.segLen = Math.max(0.5, Math.hypot(ped.nextNode.x - ped.curNode.x, ped.nextNode.z - ped.curNode.z));
+          }
+
+          const wx = ped.curNode.x + (ped.nextNode.x - ped.curNode.x) * ped.t + ped.dodgeOffsetX;
+          const wz = ped.curNode.z + (ped.nextNode.z - ped.curNode.z) * ped.t + ped.dodgeOffsetZ;
+          const baseY = ped.curNode.y + (ped.nextNode.y - ped.curNode.y) * ped.t;
+          const sy = this.nav.sampler.sample(wx, wz, baseY);
+          ped.pos.set(wx, sy !== null ? sy : baseY, wz);
+
+          const targetYaw = Math.atan2(ped.nextNode.x - ped.curNode.x, ped.nextNode.z - ped.curNode.z);
+          let dyaw = targetYaw - ped.yaw;
+          while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+          while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+          ped.yaw += dyaw * Math.min(1, 8.0 * dt);
+        }
+      }
+
+      const renderDist = Math.hypot(ped.pos.x - px, ped.pos.z - pz);
+      const visibleNow = renderDist < Math.min(95, maxPedR * 1.05) && (renderDist < 22 || this._frustum.containsPoint(ped.pos));
+      ped.root.visible = visibleNow;
+      if (visibleNow) {
+        ped.root.position.copy(ped.pos);
+        ped.root.rotation.set(ped.tumbleTimer > 0 ? 1.1 : 0, ped.yaw, 0, 'YXZ');
+        if (renderDist < 34 || ((this.frameCounter + i) & 1) === 0) {
+          ped.mixer.update(renderDist < 34 ? dt : dt * 2);
+        }
+      }
+    }
+  }
+}
+
+const cityTrafficSystem = new CityTrafficManager();
+
+function applyTrafficFlow(flowKey) {
+  const preset = TRAFFIC_FLOW_PRESETS[flowKey] || TRAFFIC_FLOW_PRESETS.medium;
+  state.trafficFlow = preset.key;
+  try {
+    localStorage.setItem('corsa3d_traffic', preset.key);
+  } catch (e) {}
+
+  const summaryEl = document.getElementById('summary-traffic-name');
+  const menuLabel = document.getElementById('menu-traffic-label');
+  if (summaryEl) summaryEl.textContent = preset.label;
+  if (menuLabel) menuLabel.textContent = preset.label;
+
+  document.querySelectorAll('.traffic-flow-card').forEach((card) => {
+    card.classList.toggle('active', card.dataset.flow === preset.key);
+  });
+
+  cityTrafficSystem.setFlowPreset(preset);
+}
+
+function cycleTrafficFlow() {
+  const order = ['low', 'medium', 'high'];
+  const idx = order.indexOf(state.trafficFlow);
+  const next = order[(idx + 1) % order.length];
+  applyTrafficFlow(next);
+}
+
+// ============================================================================
 // MINIMAPA DE ALTA PERFORMANCE (MAPA ESTÁTICO PRÉ-RENDERIZADO + GPU BLIT)
 // ============================================================================
 let minimapRenderer = null;
@@ -3304,18 +4834,18 @@ async function initSimulation() {
     updateLoadingProgress(0);
     const corsaGltf = await new Promise((res, rej) => {
       gltfLoader.load(
-        './opel_corsa_b_3door_1998.glb',
+        './assets/carros/opel_corsa_b_3door_1998.glb',
         res,
         (xhr) => {
           if (xhr.total) {
-            updateLoadingProgress(Math.min(1, xhr.loaded / xhr.total) * 35);
+            updateLoadingProgress(Math.min(1, xhr.loaded / xhr.total) * 22);
           }
         },
         rej
       );
     });
 
-    updateLoadingProgress(35);
+    updateLoadingProgress(22);
     const splitResult = splitCorsaModelIntoChassisAndWheels(corsaGltf.scene);
     corsaChassisVisual = splitResult.chassisGroup;
     corsaWheelVisuals = splitResult.wheelVisualGroups;
@@ -3325,14 +4855,14 @@ async function initSimulation() {
     scene.add(corsaChassisVisual);
     corsaWheelVisuals.forEach((wg) => scene.add(wg));
 
-    updateLoadingProgress(38);
+    updateLoadingProgress(25);
     const cityGltf = await new Promise((res, rej) => {
       gltfLoader.load(
-        './San Francisco.glb',
+        './assets/mapas/San Francisco.glb',
         res,
         (xhr) => {
           if (xhr.total) {
-            updateLoadingProgress(38 + Math.min(1, xhr.loaded / xhr.total) * 32);
+            updateLoadingProgress(25 + Math.min(1, xhr.loaded / xhr.total) * 21);
           }
         },
         rej
@@ -3343,20 +4873,27 @@ async function initSimulation() {
     cityRoot.scale.set(CITY_SCALE, CITY_SCALE, CITY_SCALE);
     scene.add(cityRoot);
 
-    updateLoadingProgress(70);
+    updateLoadingProgress(46);
     await buildCityPhysicsFromModel(cityRoot, world, groundMat, chassisMat, (pct) => {
-      updateLoadingProgress(70 + pct * 0.15);
+      updateLoadingProgress(46 + pct * 0.12);
     });
     scene.add(buildBatchedCityRenderGroup(cityRoot));
 
-    updateLoadingProgress(85);
+    updateLoadingProgress(58);
     await carAudio.loadAll((p) => {
-      updateLoadingProgress(85 + p * 15);
+      updateLoadingProgress(58 + p * 6);
     });
     carAudio.setupNodes(corsaChassisVisual);
 
     setupCorsaPhysics(splitResult.chassisComOffsetY);
+
+    updateLoadingProgress(64);
+    await cityTrafficSystem.loadAssetsAndBuild(cityRoot, world, chassisMat, gltfLoader, (p) => {
+      updateLoadingProgress(64 + p * 36);
+    });
+
     applyGraphicsQuality(state.graphicsQuality);
+    applyTrafficFlow(state.trafficFlow);
 
     state.loaded = true;
     updateLoadingProgress(100);
@@ -3556,7 +5093,10 @@ function setupCorsaPhysics(comOffsetY) {
   chassisBody.addShape(cabinBox, new CANNON.Vec3(0, 0.52 * CAR_SCALE, 0.15 * CAR_SCALE));
 
   chassisBody.collisionFilterGroup = COLLISION_CHASSIS;
-  chassisBody.collisionFilterMask = COLLISION_WALLS | COLLISION_GROUND;
+  chassisBody.collisionFilterMask = COLLISION_WALLS | COLLISION_GROUND | COLLISION_TRAFFIC;
+  chassisBody.addEventListener('collide', (ev) => {
+    cityTrafficSystem.handleCorsaCollision(ev);
+  });
 
   vehicle = new CANNON.RaycastVehicle({
     chassisBody,
@@ -5413,6 +6953,7 @@ function setupGameMenuAndOptions() {
   document.getElementById('menu-camera-btn')?.addEventListener('click', cycleCameraMode);
   document.getElementById('menu-abs-btn')?.addEventListener('click', toggleABS);
   document.getElementById('menu-tcs-btn')?.addEventListener('click', toggleTCS);
+  document.getElementById('menu-traffic-btn')?.addEventListener('click', cycleTrafficFlow);
   document.getElementById('btn-abs')?.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleABS();
@@ -5465,6 +7006,13 @@ function setupGameMenuAndOptions() {
     });
   });
 
+  document.querySelectorAll('.traffic-flow-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const f = card.dataset.flow;
+      if (f) applyTrafficFlow(f);
+    });
+  });
+
   const versionBadge = document.getElementById('game-version-badge');
   if (versionBadge) versionBadge.textContent = `v${GAME_VERSION}`;
 
@@ -5472,6 +7020,7 @@ function setupGameMenuAndOptions() {
   renderKeybindsUI();
   updateAssistButtonsUI();
   applyGraphicsQuality(state.graphicsQuality);
+  applyTrafficFlow(state.trafficFlow);
   if (envTimeSystem) envTimeSystem.updateHudDom();
 }
 
@@ -5515,6 +7064,7 @@ function animate(now) {
     }
     updateVehiclePhysicsAndEffects(dt);
     syncVisualMeshes();
+    cityTrafficSystem.update(dt, chassisBody, state);
     if (envTimeSystem) {
       envTimeSystem.update(dt, corsaChassisVisual ? corsaChassisVisual.position : camera.position);
     }

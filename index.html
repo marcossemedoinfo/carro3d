@@ -17,7 +17,7 @@
 </head>
 <body>
   <div id="canvas-container"></div>
-  <div id="game-version-badge" aria-label="Versão do jogo">v1.06</div>
+  <div id="game-version-badge" aria-label="Versão do jogo">v1.07</div>
 
   <!-- Menu Principal / Pausa / Opções -->
   <div id="loading-overlay">
@@ -42,6 +42,7 @@
           <div class="sel-pill">🗺️ Mapa: <strong id="summary-map-name">San Francisco</strong></div>
           <div class="sel-pill">🚗 Carro: <strong id="summary-car-name">Opel Corsa B '98</strong></div>
           <div class="sel-pill">🖼️ Gráficos: <strong id="summary-gfx-name">HIGH</strong></div>
+          <div class="sel-pill">🚦 Fluxo: <strong id="summary-traffic-name">MÉDIO</strong></div>
         </div>
 
         <div class="main-menu-buttons">
@@ -52,7 +53,7 @@
           <div class="menu-secondary-grid">
             <button id="btn-open-options" class="menu-btn" type="button">
               <span>⚙️ OPÇÕES</span>
-              <small>Áudio, Gráficos &amp; Teclas</small>
+              <small>Áudio, Gráficos, Trânsito &amp; Teclas</small>
             </button>
             <button id="btn-open-maps" class="menu-btn" type="button">
               <span>🗺️ SELETOR DE MAPA</span>
@@ -71,6 +72,7 @@
 
         <div class="menu-quick-bar">
           <button id="menu-tod-btn" class="quick-chip" type="button">☀️ Clima: <span id="menu-tod-label">Dia</span></button>
+          <button id="menu-traffic-btn" class="quick-chip" type="button">🚦 Trânsito: <span id="menu-traffic-label">MÉDIO</span></button>
           <button id="turbo-toggle-btn" class="quick-chip" type="button">
             <span id="turbo-badge">TURBO: DESATIVADO</span>
           </button>
@@ -89,7 +91,7 @@
 
         <div class="options-tabs" role="tablist">
           <button class="opt-tab-btn active" data-tab="tab-audio" type="button">🔊 Áudio</button>
-          <button class="opt-tab-btn" data-tab="tab-graphics" type="button">✨ Gráficos</button>
+          <button class="opt-tab-btn" data-tab="tab-graphics" type="button">✨ Gráficos &amp; Trânsito</button>
           <button class="opt-tab-btn" data-tab="tab-keybinds" type="button">⌨️ Atribuir Teclas</button>
         </div>
 
@@ -172,6 +174,39 @@
                 <li>Resolução: até 200%</li>
                 <li>Sombras: 4096px</li>
                 <li>Reflexos: Cidade 3D</li>
+              </ul>
+            </button>
+          </div>
+
+          <div class="traffic-section-header">
+            <span>🚦 Fluxo de Trânsito &amp; Pedestres (IA)</span>
+            <small>Controla a densidade de carros nas ruas e pessoas nas calçadas</small>
+          </div>
+          <div class="traffic-flow-grid">
+            <button class="gfx-preset-card traffic-flow-card" data-flow="low" type="button">
+              <div class="gfx-title">LOW <span class="gfx-tag">LEVE</span></div>
+              <div class="gfx-desc">Ruas tranquilas com máximo desempenho.</div>
+              <ul class="gfx-specs">
+                <li>Carros IA: até 6 próximos</li>
+                <li>Pedestres: até 10 próximos</li>
+              </ul>
+            </button>
+
+            <button class="gfx-preset-card traffic-flow-card active" data-flow="medium" type="button">
+              <div class="gfx-title">MÉDIO <span class="gfx-tag">PADRÃO</span></div>
+              <div class="gfx-desc">Cidade viva com ótimo equilíbrio de FPS.</div>
+              <ul class="gfx-specs">
+                <li>Carros IA: até 12 próximos</li>
+                <li>Pedestres: até 18 próximos</li>
+              </ul>
+            </button>
+
+            <button class="gfx-preset-card traffic-flow-card" data-flow="high" type="button">
+              <div class="gfx-title">ALTO <span class="gfx-tag">INTENSO</span></div>
+              <div class="gfx-desc">Avenidas e calçadas bem movimentadas.</div>
+              <ul class="gfx-specs">
+                <li>Carros IA: até 20 próximos</li>
+                <li>Pedestres: até 28 próximos</li>
               </ul>
             </button>
           </div>
