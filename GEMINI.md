@@ -12,3 +12,4 @@
    - `git commit` com mensagem descritiva iniciando pela versão (ex.: `v1.09: ...`)
    - `git push origin main`
 4. **Confirmação Final**: Informe ao usuário a versão publicada, o hash do commit e o resultado do push.
+
