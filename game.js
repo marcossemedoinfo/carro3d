@@ -6,10 +6,18 @@ import * as CANNON from 'cannon-es';
 // ============================================================================
 // 1. VERSÃO, ESCALA REALISTA E PARÂMETROS DO OPEL CORSA B 1998 (FWD)
 // ============================================================================
-const GAME_VERSION = '1.07';
+const GAME_VERSION = '1.08';
 const CITY_SCALE = 1.0;         // San Francisco já está em escala métrica real 1:1 (ruas de 15m/30m)
 const CAR_SCALE = 1.05;         // Escala real proporcional do Opel Corsa B 1998 em San Francisco
 const WORLD_SPEED_SCALE = 0.55; // Ritmo físico natural para avenidas, pontes e ladeiras reais
+
+const IS_MOBILE_DEVICE =
+  ('ontouchstart' in window) ||
+  (navigator.maxTouchPoints > 0) ||
+  (window.innerWidth <= 820) ||
+  /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+const DEVICE_MEM_GB = typeof navigator.deviceMemory === 'number' ? navigator.deviceMemory : (IS_MOBILE_DEVICE ? 4 : 8);
+const IS_LOW_VRAM_DEVICE = IS_MOBILE_DEVICE && DEVICE_MEM_GB <= 4;
 
 // Grupos de colisão (bitmasks) para isolar carroceria do asfalto (sem pulinhos)
 const COLLISION_GROUND = 1;
@@ -18,9 +26,9 @@ const COLLISION_WALLS = 4;
 const COLLISION_TRAFFIC = 8;
 
 const TRAFFIC_FLOW_PRESETS = {
-  low: { key: 'low', label: 'LOW', shortLabel: 'Leve', maxCars: 8, maxPeds: 14, carRadius: 155, pedRadius: 90 },
-  medium: { key: 'medium', label: 'MÉDIO', shortLabel: 'Médio', maxCars: 15, maxPeds: 26, carRadius: 175, pedRadius: 105 },
-  high: { key: 'high', label: 'ALTO', shortLabel: 'Intenso', maxCars: 24, maxPeds: 40, carRadius: 195, pedRadius: 115 }
+  low: { key: 'low', label: 'LOW', shortLabel: 'Leve', maxCars: 8, maxPeds: 12, carRadius: 120, pedRadius: 52 },
+  medium: { key: 'medium', label: 'MÉDIO', shortLabel: 'Médio', maxCars: 14, maxPeds: 22, carRadius: 145, pedRadius: 68 },
+  high: { key: 'high', label: 'ALTO', shortLabel: 'Intenso', maxCars: 20, maxPeds: 34, carRadius: 170, pedRadius: 82 }
 };
 
 function getSavedTrafficFlow() {
@@ -28,7 +36,7 @@ function getSavedTrafficFlow() {
     const saved = localStorage.getItem('corsa3d_traffic');
     if (saved && TRAFFIC_FLOW_PRESETS[saved]) return saved;
   } catch (e) {}
-  return 'medium';
+  return IS_MOBILE_DEVICE ? 'low' : 'medium';
 }
 
 // Pontos de Spawn verificados diretamente sobre o asfalto plano (ny = 1.0) de San Francisco
@@ -125,7 +133,7 @@ const GRAPHICS_PRESETS = {
   low: {
     key: 'low',
     label: 'BAIXO',
-    pixelRatio: 0.70,
+    pixelRatio: IS_LOW_VRAM_DEVICE ? 0.68 : 0.78,
     shadows: false,
     shadowType: THREE.BasicShadowMap,
     shadowSize: 512,
@@ -135,59 +143,59 @@ const GRAPHICS_PRESETS = {
     clearcoat: false,
     realtimeCube: false,
     maxSmokeParticles: 35,
-    maxSkidSegments: 280,
-    cameraFar: 320,
+    maxSkidSegments: 260,
+    cameraFar: 300,
     fogMult: 1.85
   },
   medium: {
     key: 'medium',
     label: 'MÉDIO',
-    pixelRatio: 1.0,
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 1.0),
     shadows: true,
     shadowType: THREE.PCFShadowMap,
     shadowSize: 1024,
-    shadowDist: 16,
+    shadowDist: 15,
     reflections: 'sky',
-    envResolution: [512, 256],
+    envResolution: [256, 128],
     clearcoat: false,
     realtimeCube: false,
-    maxSmokeParticles: 160,
-    maxSkidSegments: 640,
-    cameraFar: 620,
-    fogMult: 1.05
+    maxSmokeParticles: 140,
+    maxSkidSegments: 580,
+    cameraFar: 480,
+    fogMult: 1.15
   },
   high: {
     key: 'high',
     label: 'ALTO',
-    pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 1.25),
     shadows: true,
-    shadowType: THREE.PCFSoftShadowMap,
-    shadowSize: 2048,
-    shadowDist: 22,
+    shadowType: THREE.PCFShadowMap,
+    shadowSize: 1024,
+    shadowDist: 18,
     reflections: 'clearcoat',
-    envResolution: [1024, 512],
+    envResolution: [512, 256],
     clearcoat: true,
     realtimeCube: false,
-    maxSmokeParticles: 260,
-    maxSkidSegments: 1050,
-    cameraFar: 850,
+    maxSmokeParticles: 240,
+    maxSkidSegments: 950,
+    cameraFar: 640,
     fogMult: 1.0
   },
   ultra: {
     key: 'ultra',
     label: 'ULTRA',
-    pixelRatio: Math.min(window.devicePixelRatio || 1, 2.0),
+    pixelRatio: Math.min(window.devicePixelRatio || 1, IS_MOBILE_DEVICE ? 1.25 : 1.5),
     shadows: true,
     shadowType: THREE.PCFSoftShadowMap,
-    shadowSize: 4096,
-    shadowDist: 28,
+    shadowSize: 2048,
+    shadowDist: 22,
     reflections: 'realtime',
-    envResolution: [1024, 512],
+    envResolution: [512, 256],
     clearcoat: true,
     realtimeCube: true,
-    maxSmokeParticles: 320,
-    maxSkidSegments: 1400,
-    cameraFar: 1000,
+    maxSmokeParticles: 300,
+    maxSkidSegments: 1300,
+    cameraFar: 820,
     fogMult: 0.90
   }
 };
@@ -197,7 +205,76 @@ function getSavedGraphicsQuality() {
     const saved = localStorage.getItem('corsa3d_graphics');
     if (saved && GRAPHICS_PRESETS[saved]) return saved;
   } catch (e) {}
-  return 'high';
+  if (IS_MOBILE_DEVICE) return IS_LOW_VRAM_DEVICE ? 'low' : 'medium';
+  return 'medium';
+}
+
+// Reduz resolução de texturas em carregamentos GLB para evitar estouro de VRAM (especialmente em Android)
+function optimizeSceneTexturesAndMaterials(root, maxTexDim, stripExtraMaps = false) {
+  const seenTex = new Set();
+  const seenMat = new Set();
+  const texKeys = ['map', 'emissiveMap', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'bumpMap'];
+
+  const shrinkTexture = (tex) => {
+    if (!tex || seenTex.has(tex)) return;
+    seenTex.add(tex);
+    tex.anisotropy = 1;
+    const img = tex.image;
+    if (!img || !img.width || !img.height) return;
+    const w = img.width;
+    const h = img.height;
+    if (w <= maxTexDim && h <= maxTexDim) return;
+
+    const scale = maxTexDim / Math.max(w, h);
+    const nw = Math.max(16, Math.round(w * scale));
+    const nh = Math.max(16, Math.round(h * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = nw;
+    canvas.height = nh;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, nw, nh);
+    if (typeof img.close === 'function') {
+      try { img.close(); } catch (e) {}
+    }
+    tex.image = canvas;
+    tex.needsUpdate = true;
+  };
+
+  root.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i];
+      if (!m || seenMat.has(m)) continue;
+      seenMat.add(m);
+      for (let k = 0; k < texKeys.length; k++) {
+        const key = texKeys[k];
+        const t = m[key];
+        if (!t) continue;
+        if (stripExtraMaps && key !== 'map' && key !== 'emissiveMap') {
+          t.dispose();
+          m[key] = null;
+        } else {
+          shrinkTexture(t);
+        }
+      }
+      if (stripExtraMaps) {
+        m.envMapIntensity = 0;
+      }
+    }
+  });
+}
+
+function disposeObjectGeometries(root) {
+  if (!root) return;
+  const disposed = new Set();
+  root.traverse((obj) => {
+    if (obj.geometry && !disposed.has(obj.geometry)) {
+      disposed.add(obj.geometry);
+      obj.geometry.dispose();
+    }
+  });
 }
 
 const corsaReflectiveMaterials = {
@@ -1497,9 +1574,9 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
 
   gltfScene.updateMatrixWorld(true);
 
-  const meshes = [];
+  const gltfMeshes = [];
   gltfScene.traverse((child) => {
-    if (child.isMesh) meshes.push(child);
+    if (child.isMesh) gltfMeshes.push(child);
   });
 
   function getWheelIndex(rawX, rawZ) {
@@ -1518,61 +1595,84 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
     return Math.min(distFront, distRear) < 28.65;
   }
 
-  meshes.forEach((mesh) => {
+  // Agrupa geometrias pelo mesmo material final + destino (chassi ou roda 0..3) para reduzir ~75 draw calls para ~14
+  const mergedPartBuckets = new Map();
+  const matCacheBySignature = new Map();
+
+  gltfMeshes.forEach((mesh) => {
     const matName = (mesh.material?.name || '').toLowerCase();
     const nodeName = (mesh.name || '').toLowerCase();
 
     let clonedMat;
     if (matName.includes('carpaint')) {
-      // Pintura automotiva física com camada de verniz (Clearcoat) para reflexos nítidos e profundos
-      clonedMat = new THREE.MeshPhysicalMaterial({
-        name: mesh.material.name,
-        color: mesh.material.color.clone(),
-        map: mesh.material.map || null,
-        side: mesh.material.side,
-        metalness: 0.24,
-        roughness: 0.22,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.035,
-        ior: 1.5,
-        reflectivity: 1.0,
-        envMapIntensity: 1.9
-      });
-      corsaReflectiveMaterials.paint.push(clonedMat);
-    } else if (matName.includes('windowglass') || matName.includes('clearglass')) {
-      clonedMat = new THREE.MeshPhysicalMaterial({
-        name: mesh.material.name,
-        color: mesh.material.color.clone(),
-        transparent: true,
-        opacity: matName.includes('clearglass') ? 0.30 : 0.48,
-        roughness: 0.03,
-        metalness: 0.12,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.02,
-        reflectivity: 1.0,
-        envMapIntensity: 2.3,
-        depthWrite: false,
-        side: THREE.DoubleSide
-      });
-      corsaReflectiveMaterials.glass.push(clonedMat);
-    } else {
-      clonedMat = mesh.material.clone();
-      if (matName.includes('interior')) {
-        clonedMat.roughness = 0.85;
-        clonedMat.metalness = 0.05;
-        clonedMat.envMapIntensity = 0.3;
-        clonedMat.side = THREE.DoubleSide;
-      } else if (matName.includes('chrome') || matName.includes('rim') || matName.includes('mirror') || matName === 'material') {
-        clonedMat.metalness = matName.includes('mirror') ? 0.98 : 0.88;
-        clonedMat.roughness = matName.includes('mirror') ? 0.03 : 0.14;
-        clonedMat.envMapIntensity = 1.95;
-        corsaReflectiveMaterials.chrome.push(clonedMat);
-      } else if (matName.includes('tire') || matName === 'black') {
-        clonedMat.roughness = 0.84;
-        clonedMat.metalness = 0.04;
-        clonedMat.envMapIntensity = 0.35;
+      const sig = `paint_${matName}_${mesh.material.color.getHexString()}`;
+      if (matCacheBySignature.has(sig)) {
+        clonedMat = matCacheBySignature.get(sig);
       } else {
-        clonedMat.envMapIntensity = 0.5;
+        // Pintura automotiva física com camada de verniz (Clearcoat) para reflexos nítidos e profundos
+        clonedMat = new THREE.MeshPhysicalMaterial({
+          name: mesh.material.name,
+          color: mesh.material.color.clone(),
+          map: mesh.material.map || null,
+          side: mesh.material.side,
+          metalness: 0.24,
+          roughness: 0.22,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.035,
+          ior: 1.5,
+          reflectivity: 1.0,
+          envMapIntensity: 1.9
+        });
+        matCacheBySignature.set(sig, clonedMat);
+        corsaReflectiveMaterials.paint.push(clonedMat);
+      }
+    } else if (matName.includes('windowglass') || matName.includes('clearglass')) {
+      const sig = `glass_${matName}_${mesh.material.color.getHexString()}`;
+      if (matCacheBySignature.has(sig)) {
+        clonedMat = matCacheBySignature.get(sig);
+      } else {
+        clonedMat = new THREE.MeshPhysicalMaterial({
+          name: mesh.material.name,
+          color: mesh.material.color.clone(),
+          transparent: true,
+          opacity: matName.includes('clearglass') ? 0.30 : 0.48,
+          roughness: 0.03,
+          metalness: 0.12,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.02,
+          reflectivity: 1.0,
+          envMapIntensity: 2.3,
+          depthWrite: false,
+          side: THREE.DoubleSide
+        });
+        matCacheBySignature.set(sig, clonedMat);
+        corsaReflectiveMaterials.glass.push(clonedMat);
+      }
+    } else {
+      const colHex = mesh.material?.color ? mesh.material.color.getHexString() : 'ffffff';
+      const sig = `std_${matName}_${colHex}_${mesh.material?.map?.uuid || ''}`;
+      if (matCacheBySignature.has(sig)) {
+        clonedMat = matCacheBySignature.get(sig);
+      } else {
+        clonedMat = mesh.material.clone();
+        if (matName.includes('interior')) {
+          clonedMat.roughness = 0.85;
+          clonedMat.metalness = 0.05;
+          clonedMat.envMapIntensity = 0.3;
+          clonedMat.side = THREE.DoubleSide;
+        } else if (matName.includes('chrome') || matName.includes('rim') || matName.includes('mirror') || matName === 'material') {
+          clonedMat.metalness = matName.includes('mirror') ? 0.98 : 0.88;
+          clonedMat.roughness = matName.includes('mirror') ? 0.03 : 0.14;
+          clonedMat.envMapIntensity = 1.95;
+          corsaReflectiveMaterials.chrome.push(clonedMat);
+        } else if (matName.includes('tire') || matName === 'black') {
+          clonedMat.roughness = 0.84;
+          clonedMat.metalness = 0.04;
+          clonedMat.envMapIntensity = 0.35;
+        } else {
+          clonedMat.envMapIntensity = 0.5;
+        }
+        matCacheBySignature.set(sig, clonedMat);
       }
     }
 
@@ -1632,64 +1732,100 @@ function splitCorsaModelIntoChassisAndWheels(gltfScene) {
       }
     }
 
+    const scaleFactor = 0.01 * CAR_SCALE;
     Object.keys(buckets).forEach((bKey) => {
       const indices = buckets[bKey];
       if (indices.length === 0) return;
 
       const isWheel = ['0', '1', '2', '3'].includes(bKey);
       const bIdx = isWheel ? parseInt(bKey, 10) : -1;
-
-      const subGeom = new THREE.BufferGeometry();
-      const newPos = new Float32Array(indices.length * 3);
-      const newNorm = normAttr ? new Float32Array(indices.length * 3) : null;
-      const newUv = uvAttr ? new Float32Array(indices.length * 2) : null;
-
-      const centerRaw = isWheel ? WHEEL_HUBS_LOCAL[bIdx].rawCenter : new THREE.Vector3(0, 0, 0);
-      const scaleFactor = 0.01 * CAR_SCALE;
-
-      for (let k = 0; k < indices.length; k++) {
-        const vi = indices[k];
-        const rx = -(posAttr.getX(vi) - centerRaw.x) * scaleFactor;
-        const ry = -(posAttr.getY(vi) - centerRaw.y) * scaleFactor;
-        const rz =  (posAttr.getZ(vi) - centerRaw.z) * scaleFactor;
-
-        newPos[k * 3] = rx;
-        newPos[k * 3 + 1] = ry;
-        newPos[k * 3 + 2] = rz;
-
-        if (newNorm) {
-          newNorm[k * 3] = -normAttr.getX(vi);
-          newNorm[k * 3 + 1] = -normAttr.getY(vi);
-          newNorm[k * 3 + 2] =  normAttr.getZ(vi);
-        }
-        if (newUv) {
-          newUv[k * 2] = uvAttr.getX(vi);
-          newUv[k * 2 + 1] = uvAttr.getY(vi);
-        }
-      }
-
-      subGeom.setAttribute('position', new THREE.BufferAttribute(newPos, 3));
-      if (newNorm) subGeom.setAttribute('normal', new THREE.BufferAttribute(newNorm, 3));
-      else subGeom.computeVertexNormals();
-      if (newUv) subGeom.setAttribute('uv', new THREE.BufferAttribute(newUv, 2));
-
       let matToUse = clonedMat;
       if (bKey === 'headlight') matToUse = headlightMat;
       else if (bKey === 'brakelight') matToUse = brakeLightMat;
       else if (bKey === 'thirdbrakelight') matToUse = thirdBrakeLightMat;
       else if (bKey === 'reverselight') matToUse = reverseLightMat;
 
-      const subMesh = new THREE.Mesh(subGeom, matToUse);
-      subMesh.castShadow = !['headlight', 'brakelight', 'thirdbrakelight', 'reverselight'].includes(bKey);
-      subMesh.receiveShadow = false;
+      const castsShadow =
+        !['headlight', 'brakelight', 'thirdbrakelight', 'reverselight'].includes(bKey) &&
+        !matName.includes('interior') &&
+        !matName.includes('glass');
 
-      if (bIdx === -1) {
-        chassisGroup.add(subMesh);
-      } else {
-        wheelVisualGroups[bIdx].add(subMesh);
+      const mergeKey = `${bIdx}_${matToUse.uuid}`;
+      let mb = mergedPartBuckets.get(mergeKey);
+      if (!mb) {
+        mb = { bIdx, mat: matToUse, castsShadow, posChunks: [], normChunks: [], uvChunks: [], hasNorm: Boolean(normAttr), hasUv: Boolean(uvAttr), totalVerts: 0 };
+        mergedPartBuckets.set(mergeKey, mb);
       }
+      if (!normAttr) mb.hasNorm = false;
+      if (!uvAttr) mb.hasUv = false;
+      if (castsShadow) mb.castsShadow = true;
+
+      const centerRaw = isWheel ? WHEEL_HUBS_LOCAL[bIdx].rawCenter : { x: 0, y: 0, z: 0 };
+      const pArr = new Float32Array(indices.length * 3);
+      const nArr = mb.hasNorm ? new Float32Array(indices.length * 3) : null;
+      const uArr = mb.hasUv ? new Float32Array(indices.length * 2) : null;
+
+      for (let k = 0; k < indices.length; k++) {
+        const vi = indices[k];
+        pArr[k * 3] = -(posAttr.getX(vi) - centerRaw.x) * scaleFactor;
+        pArr[k * 3 + 1] = -(posAttr.getY(vi) - centerRaw.y) * scaleFactor;
+        pArr[k * 3 + 2] = (posAttr.getZ(vi) - centerRaw.z) * scaleFactor;
+        if (nArr) {
+          nArr[k * 3] = -normAttr.getX(vi);
+          nArr[k * 3 + 1] = -normAttr.getY(vi);
+          nArr[k * 3 + 2] = normAttr.getZ(vi);
+        }
+        if (uArr) {
+          uArr[k * 2] = uvAttr.getX(vi);
+          uArr[k * 2 + 1] = uvAttr.getY(vi);
+        }
+      }
+
+      mb.posChunks.push(pArr);
+      if (nArr) mb.normChunks.push(nArr);
+      if (uArr) mb.uvChunks.push(uArr);
+      mb.totalVerts += indices.length;
     });
   });
+
+  mergedPartBuckets.forEach((mb) => {
+    const posFlat = new Float32Array(mb.totalVerts * 3);
+    const normFlat = mb.hasNorm ? new Float32Array(mb.totalVerts * 3) : null;
+    const uvFlat = mb.hasUv ? new Float32Array(mb.totalVerts * 2) : null;
+    let pOff = 0;
+    let uOff = 0;
+    for (let i = 0; i < mb.posChunks.length; i++) {
+      const pc = mb.posChunks[i];
+      posFlat.set(pc, pOff);
+      if (normFlat) normFlat.set(mb.normChunks[i], pOff);
+      pOff += pc.length;
+      if (uvFlat) {
+        const uc = mb.uvChunks[i];
+        uvFlat.set(uc, uOff);
+        uOff += uc.length;
+      }
+    }
+
+    const mergedGeom = new THREE.BufferGeometry();
+    mergedGeom.setAttribute('position', new THREE.BufferAttribute(posFlat, 3));
+    if (normFlat) mergedGeom.setAttribute('normal', new THREE.BufferAttribute(normFlat, 3));
+    else mergedGeom.computeVertexNormals();
+    if (uvFlat) mergedGeom.setAttribute('uv', new THREE.BufferAttribute(uvFlat, 2));
+    mergedGeom.computeBoundingSphere();
+
+    const subMesh = new THREE.Mesh(mergedGeom, mb.mat);
+    subMesh.castShadow = mb.castsShadow;
+    subMesh.receiveShadow = false;
+
+    if (mb.bIdx === -1) {
+      chassisGroup.add(subMesh);
+    } else {
+      wheelVisualGroups[mb.bIdx].add(subMesh);
+    }
+  });
+
+  // Libera todas as geometrias brutas do GLB original para economizar RAM/VRAM
+  disposeObjectGeometries(gltfScene);
 
   const CHASSIS_COM_OFFSET_Y = 0.55 * CAR_SCALE;
   chassisGroup.children.forEach((c) => {
@@ -1831,6 +1967,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   }
 
   const totalMeshes = meshes.length;
+  let lastPhysicsYieldMs = performance.now();
 
   for (let m = 0; m < totalMeshes; m++) {
     const { mesh, path, isNetworkBoundWall } = meshes[m];
@@ -1943,12 +2080,13 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
       }
     }
 
-    if (m % 80 === 0) {
+    if (performance.now() - lastPhysicsYieldMs > 36) {
       if (onProgress) {
         const pct = Math.round((m / totalMeshes) * 85);
         onProgress(pct);
       }
       await new Promise((r) => setTimeout(r, 0));
+      lastPhysicsYieldMs = performance.now();
     }
   }
 
@@ -1969,7 +2107,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
     });
     roadBody.surfaceType = sRoad.surfaceType || 'asphalt';
     roadBody.collisionFilterGroup = COLLISION_GROUND;
-    roadBody.collisionFilterMask = COLLISION_CHASSIS | COLLISION_WALLS;
+    roadBody.collisionFilterMask = COLLISION_CHASSIS;
     physicsWorld.addBody(roadBody);
   });
 
@@ -2006,7 +2144,7 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
         material: wallMaterial
       });
       sectorBody.collisionFilterGroup = COLLISION_WALLS;
-      sectorBody.collisionFilterMask = COLLISION_CHASSIS;
+      sectorBody.collisionFilterMask = COLLISION_CHASSIS | COLLISION_TRAFFIC;
 
       chunk.forEach((seg) => {
         const box = new CANNON.Box(new CANNON.Vec3(0.38, seg.height * 0.5, seg.len * 0.5));
@@ -2038,10 +2176,10 @@ async function buildCityPhysicsFromModel(cityScene, physicsWorld, groundMaterial
   }
 }
 
-// Agrupa malhas estáticas por material e setor espacial de 320m x 320m (reduz ~1.400 draw calls para ~150)
+// Agrupa malhas estáticas por material e setor espacial de 160m x 160m para frustum culling eficiente
 function buildBatchedCityRenderGroup(cityScene) {
   cityScene.updateMatrixWorld(true);
-  const BATCH_CHUNK = 320.0;
+  const BATCH_CHUNK = 160.0;
   const buckets = new Map();
   const worldBox = new THREE.Box3();
   const center = new THREE.Vector3();
@@ -2174,6 +2312,8 @@ function buildBatchedCityRenderGroup(cityScene) {
     mergedGroup.add(batchMesh);
   });
 
+  // Libera geometrias originais já batcheadas para não duplicar VRAM/RAM
+  disposeObjectGeometries(cityScene);
   console.log(`Otimização WebGL: ${buckets.size} lotes combinados ativos para San Francisco.`);
   return mergedGroup;
 }
@@ -2756,7 +2896,19 @@ function buildCityNavigationGraphs(cityRoot) {
   return { sampler, carEdges: activeCarEdges, pedNodes: pedNodes, walkPedNodes };
 }
 
+function getCompactMaterialSignature(mat) {
+  const cHex = mat.color ? mat.color.getHexString() : 'ffffff';
+  const rQ = mat.roughness !== undefined ? Math.round(mat.roughness * 4) : 2;
+  const mQ = mat.metalness !== undefined ? Math.round(mat.metalness * 4) : 0;
+  const opQ = mat.transparent ? Math.round((mat.opacity ?? 1) * 10) : 10;
+  const mapId = mat.map ? mat.map.uuid : '';
+  return `${cHex}_${rQ}_${mQ}_${opQ}_${mapId}_${mat.side || 0}`;
+}
+
 function buildNormalizedStaticCarTemplate(gltfScene, cfg, shadowTex, glowTex) {
+  // Reduz VRAM de texturas de trânsito drasticamente (256px mobile / 512px PC) e dispensa mapas PBR extras em IA
+  optimizeSceneTexturesAndMaterials(gltfScene, IS_MOBILE_DEVICE ? 256 : 512, true);
+
   const alignPivot = new THREE.Group();
   gltfScene.rotation.y = cfg.yawOffset;
   alignPivot.add(gltfScene);
@@ -2793,7 +2945,7 @@ function buildNormalizedStaticCarTemplate(gltfScene, cfg, shadowTex, glowTex) {
   const finalSize = new THREE.Vector3();
   finalBox.getSize(finalSize);
 
-  // Static batching por material para manter draw calls mínimos mesmo no tráfego ALTO
+  // Agrupa materiais visualmente equivalentes (reduz até 53 draw calls no SUV para ~10)
   const buckets = new Map();
   const vPos = new THREE.Vector3();
   const vNorm = new THREE.Vector3();
@@ -2812,12 +2964,13 @@ function buildNormalizedStaticCarTemplate(gltfScene, cfg, shadowTex, glowTex) {
     const addGroupToBucket = (mat, start, count) => {
       if (!mat) return;
       if (mat.map) mat.map.anisotropy = 1;
-      let b = buckets.get(mat);
+      const sig = getCompactMaterialSignature(mat);
+      let b = buckets.get(sig);
       if (!b) {
-        b = { material: mat, parts: [], totalVerts: 0, totalIndices: 0, hasUv: true };
-        buckets.set(mat, b);
+        b = { material: mat, parts: [], totalVerts: 0, totalIndices: 0, hasUv: Boolean(uv && mat.map) };
+        buckets.set(sig, b);
       }
-      if (!uv) b.hasUv = false;
+      if (!uv || !mat.map) b.hasUv = b.hasUv && Boolean(uv && b.material.map);
       const triCount = Math.floor(count / 3);
       if (triCount <= 0) return;
       b.parts.push({ mesh: ch, geom, pos, norm, uv, idx, start, count: triCount * 3 });
@@ -2835,6 +2988,11 @@ function buildNormalizedStaticCarTemplate(gltfScene, cfg, shadowTex, glowTex) {
       addGroupToBucket(mats[0], 0, idx ? idx.count : pos.count);
     }
   });
+
+  // Se o carro IA for muito pesado (> 35k verts totais), solda vértices próximos (~3.2cm) mantendo quinas/normais
+  let grandTotalVerts = 0;
+  buckets.forEach((b) => { grandTotalVerts += b.totalVerts; });
+  const weldStep = grandTotalVerts > 80000 ? 0.036 : grandTotalVerts > 30000 ? 0.022 : 0.0;
 
   const mergedParts = [];
   buckets.forEach((b) => {
@@ -2899,16 +3057,67 @@ function buildNormalizedStaticCarTemplate(gltfScene, cfg, shadowTex, glowTex) {
       }
     });
 
-    const trimmedPos = posArr.subarray(0, vCursor * 3);
-    const trimmedNorm = normArr.subarray(0, vCursor * 3);
     const mergedGeom = new THREE.BufferGeometry();
-    mergedGeom.setAttribute('position', new THREE.BufferAttribute(trimmedPos, 3));
-    mergedGeom.setAttribute('normal', new THREE.BufferAttribute(trimmedNorm, 3));
-    if (uvArr) mergedGeom.setAttribute('uv', new THREE.BufferAttribute(uvArr.subarray(0, vCursor * 2), 2));
-    mergedGeom.setIndex(new THREE.BufferAttribute(idxArr, 1));
+    if (weldStep > 0 && vCursor > 3000) {
+      // Decimação rápida por grid espacial preservando silhueta e quinas para 60fps
+      const invStep = 1.0 / weldStep;
+      const cellMap = new Map();
+      const remap = new Uint32Array(vCursor);
+      const wPos = [];
+      const wNorm = [];
+      const wUv = uvArr ? [] : null;
+      let wCount = 0;
+
+      for (let v = 0; v < vCursor; v++) {
+        const o3 = v * 3;
+        const px = posArr[o3], py = posArr[o3 + 1], pz = posArr[o3 + 2];
+        const nx = normArr[o3], ny = normArr[o3 + 1], nz = normArr[o3 + 2];
+        const qx = (Math.round(px * invStep) + 1024) & 2047;
+        const qy = (Math.round(py * invStep) + 1024) & 2047;
+        const qz = (Math.round(pz * invStep) + 1024) & 2047;
+        const nb =
+          ((Math.round(nx * 2) + 2) * 25) +
+          ((Math.round(ny * 2) + 2) * 5) +
+          (Math.round(nz * 2) + 2);
+        const key = (((qx * 2048 + qy) * 2048 + qz) * 128) + nb;
+        let nv = cellMap.get(key);
+        if (nv === undefined) {
+          nv = wCount++;
+          cellMap.set(key, nv);
+          wPos.push(px, py, pz);
+          wNorm.push(nx, ny, nz);
+          if (wUv) wUv.push(uvArr[v * 2], uvArr[v * 2 + 1]);
+        }
+        remap[v] = nv;
+      }
+
+      const wIdx = [];
+      for (let i = 0; i < iCursor; i += 3) {
+        const ra = remap[idxArr[i]];
+        const rb = remap[idxArr[i + 1]];
+        const rc = remap[idxArr[i + 2]];
+        if (ra !== rb && rb !== rc && rc !== ra) {
+          wIdx.push(ra, rb, rc);
+        }
+      }
+      if (wIdx.length === 0) return;
+
+      mergedGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wPos), 3));
+      mergedGeom.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(wNorm), 3));
+      if (wUv) mergedGeom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(wUv), 2));
+      mergedGeom.setIndex(new THREE.BufferAttribute(wCount > 65535 ? new Uint32Array(wIdx) : new Uint16Array(wIdx), 1));
+    } else {
+      mergedGeom.setAttribute('position', new THREE.BufferAttribute(posArr.subarray(0, vCursor * 3), 3));
+      mergedGeom.setAttribute('normal', new THREE.BufferAttribute(normArr.subarray(0, vCursor * 3), 3));
+      if (uvArr) mergedGeom.setAttribute('uv', new THREE.BufferAttribute(uvArr.subarray(0, vCursor * 2), 2));
+      mergedGeom.setIndex(new THREE.BufferAttribute(idxArr, 1));
+    }
     mergedGeom.computeBoundingSphere();
     mergedParts.push({ geom: mergedGeom, mat: b.material });
   });
+
+  // Libera geometrias originais da cena GLB do carro de trânsito
+  disposeObjectGeometries(gltfScene);
 
   const shadowGeom = new THREE.PlaneGeometry(finalSize.x * 1.18, finalSize.z * 1.06);
   shadowGeom.rotateX(-Math.PI / 2);
@@ -2968,6 +3177,9 @@ function buildNormalizedStaticCarTemplate(gltfScene, cfg, shadowTex, glowTex) {
 function buildNormalizedPedestrianTemplate(gltf, cfg, shadowTex) {
   const source = gltf.scene;
   const rawClips = gltf.animations || [];
+
+  // Reduz texturas dos pedestres (ex: Pedestre 2 tinha 22MB em 1024px) e remove mapas extras no mobile
+  optimizeSceneTexturesAndMaterials(source, IS_MOBILE_DEVICE ? 256 : 512, IS_MOBILE_DEVICE);
 
   // Zera deriva horizontal XZ no root/quadril (necessário para clipes Mixamo in-situ)
   const clips = rawClips.map((clip) => {
@@ -3125,31 +3337,50 @@ class CityTrafficManager {
     this._projScreen = new THREE.Matrix4();
   }
 
-  async loadAssetsAndBuild(cityRoot, world, chassisMat, loader, onProgress) {
-    this.nav = buildCityNavigationGraphs(cityRoot);
+  buildCityGraph(cityRoot) {
+    if (!this.nav && cityRoot) {
+      this.nav = buildCityNavigationGraphs(cityRoot);
+    }
+  }
+
+  async loadAssetsAndBuild(cityRoot, world, trafficMat, loader, onProgress) {
+    if (!this.nav && cityRoot) {
+      this.nav = buildCityNavigationGraphs(cityRoot);
+    }
     const shadowTex = createSoftBlobShadowTexture();
     const glowTex = createLightGlowSpriteTexture();
 
-    const totalAssets = TRAFFIC_CAR_CONFIGS.length + PEDESTRIAN_CONFIGS.length;
+    // Em celulares Android com pouca RAM/VRAM (<= 4GB), carrega 2 carros e 2 pedestres variados
+    // para reduzir pela metade os picos de decodificação de texturas/GLB e evitar crash do WebGL.
+    const carConfigs = IS_LOW_VRAM_DEVICE
+      ? [TRAFFIC_CAR_CONFIGS[0], TRAFFIC_CAR_CONFIGS[1]]
+      : TRAFFIC_CAR_CONFIGS;
+    const pedConfigs = IS_LOW_VRAM_DEVICE
+      ? [PEDESTRIAN_CONFIGS[0], PEDESTRIAN_CONFIGS[2]]
+      : PEDESTRIAN_CONFIGS;
+
+    const totalAssets = carConfigs.length + pedConfigs.length;
     let doneCount = 0;
 
     const loadOne = (url) => new Promise((res, rej) => loader.load(url, res, undefined, rej));
 
-    for (const cfg of TRAFFIC_CAR_CONFIGS) {
+    for (const cfg of carConfigs) {
       const gltf = await loadOne(cfg.url);
       this.carTemplates.push(buildNormalizedStaticCarTemplate(gltf.scene, cfg, shadowTex, glowTex));
       doneCount++;
       if (onProgress) onProgress(doneCount / totalAssets);
+      await new Promise((r) => setTimeout(r, 0));
     }
 
-    for (const cfg of PEDESTRIAN_CONFIGS) {
+    for (const cfg of pedConfigs) {
       const gltf = await loadOne(cfg.url);
       this.pedTemplates.push(buildNormalizedPedestrianTemplate(gltf, cfg, shadowTex));
       doneCount++;
       if (onProgress) onProgress(doneCount / totalAssets);
+      await new Promise((r) => setTimeout(r, 0));
     }
 
-    // Pré-alocar pool máximo (HIGH) e ativar apenas até flowPreset.maxCars/maxPeds
+    // Pré-alocar pool máximo e ativar apenas até flowPreset.maxCars/maxPeds
     const maxCars = TRAFFIC_FLOW_PRESETS.high.maxCars;
     const maxPeds = TRAFFIC_FLOW_PRESETS.high.maxPeds;
 
@@ -3171,7 +3402,9 @@ class CityTrafficManager {
         pos: new THREE.Vector3(0, -500, 0),
         yaw: 0,
         pitch: 0,
-        knockTimer: 0,
+        roll: 0,
+        wrecked: false,
+        wreckTimer: 0,
         knockVx: 0,
         knockVz: 0,
         knockYawVel: 0,
@@ -3206,19 +3439,41 @@ class CityTrafficManager {
       });
     }
 
-    // 6 corpos cinemáticos leves compartilhados apenas com os carros próximos ao Corsa
-    const boxShape = new CANNON.Box(new CANNON.Vec3(0.95, 0.68, 2.05));
+    // 6 corpos DINÂMICOS (massa real 1120kg) compartilhados apenas com os carros próximos ao Corsa:
+    // em colisões, transferem momento linear/angular reais sem teleporte nem catapultar o Corsa.
+    const boxShape = new CANNON.Box(new CANNON.Vec3(0.88, 0.50, 1.96));
     for (let i = 0; i < 6; i++) {
       const body = new CANNON.Body({
-        mass: 0,
-        type: CANNON.Body.KINEMATIC,
-        material: chassisMat,
+        mass: 1120,
+        type: CANNON.Body.DYNAMIC,
+        material: trafficMat,
+        linearDamping: 0.08,
+        angularDamping: 0.45,
+        allowSleep: false,
         collisionFilterGroup: COLLISION_TRAFFIC,
-        collisionFilterMask: COLLISION_CHASSIS
+        collisionFilterMask: COLLISION_CHASSIS | COLLISION_WALLS | COLLISION_TRAFFIC
       });
+      body.angularFactor.set(0.06, 1.0, 0.06);
       body.addShape(boxShape, new CANNON.Vec3(0, 0.72, 0));
-      body.position.set(0, -500, 0);
+      body.updateMassProperties();
+      body.position.set(0, -500 - i * 4, 0);
       body.userData = { trafficCar: null };
+      body.addEventListener('collide', (ev) => {
+        const myCar = body.userData ? body.userData.trafficCar : null;
+        if (!myCar || !ev || !ev.body) return;
+        const other = ev.body;
+        if (other === chassisBody || (other.userData && other.userData.trafficCar)) {
+          const rvx = body.velocity.x - other.velocity.x;
+          const rvy = body.velocity.y - other.velocity.y;
+          const rvz = body.velocity.z - other.velocity.z;
+          if (rvx * rvx + rvy * rvy + rvz * rvz > 3.2) {
+            this.markCarWrecked(myCar);
+            if (other.userData && other.userData.trafficCar) {
+              this.markCarWrecked(other.userData.trafficCar);
+            }
+          }
+        }
+      });
       world.addBody(body);
       this.physicsColliders.push(body);
     }
@@ -3243,6 +3498,15 @@ class CityTrafficManager {
         car.active = false;
         car.root.visible = false;
         car.edge = null;
+        car.wrecked = false;
+        car.wreckTimer = 0;
+        if (car.collider) {
+          car.collider.userData.trafficCar = null;
+          car.collider.position.set(0, -500, 0);
+          car.collider.velocity.setZero();
+          car.collider.angularVelocity.setZero();
+          car.collider = null;
+        }
       } else if (!car.active) {
         car.active = true;
         this.spawnCarNear(car, px, py, pz, true);
@@ -3294,10 +3558,19 @@ class CityTrafficManager {
     }
 
     if (!chosen) return;
+    if (car.collider) {
+      car.collider.userData.trafficCar = null;
+      car.collider.position.set(0, -500, 0);
+      car.collider.velocity.setZero();
+      car.collider.angularVelocity.setZero();
+      car.collider = null;
+    }
     car.edge = chosen;
     car.dist = Math.random() * chosen.length * 0.7;
     car.speed = Math.min(car.baseSpeed, chosen.speedLimit) * 0.85;
-    car.knockTimer = 0;
+    car.wrecked = false;
+    car.wreckTimer = 0;
+    car.roll = 0;
     car.knockVx = 0;
     car.knockVz = 0;
     car.knockYawVel = 0;
@@ -3389,22 +3662,83 @@ class CityTrafficManager {
     ped.activeAction = targetAction;
   }
 
+  markCarWrecked(car) {
+    if (!car || !car.active) return;
+    if (!car.wrecked) {
+      car.wrecked = true;
+      car.braking = true;
+      car.speed = 0;
+    }
+    car.wreckTimer = 14.0;
+  }
+
   handleCorsaCollision(event) {
     if (!this.initialized || !event || !event.body || !event.body.userData) return;
     const car = event.body.userData.trafficCar;
-    if (!car || !car.active || !chassisBody) return;
+    if (!car || !car.active) return;
+    this.markCarWrecked(car);
+  }
 
-    const dx = car.pos.x - chassisBody.position.x;
-    const dz = car.pos.z - chassisBody.position.z;
-    const dist = Math.max(0.5, Math.hypot(dx, dz));
-    const corsaSpeed = Math.hypot(chassisBody.velocity.x, chassisBody.velocity.z);
-    const impact = Math.max(4.5, Math.min(20.0, corsaSpeed * 0.88));
+  syncPhysicsPreStep(stepDt) {
+    if (!this.initialized) return;
+    const dt = stepDt > 0 ? stepDt : (1 / 60);
 
-    car.knockVx = (dx / dist) * impact + chassisBody.velocity.x * 0.42;
-    car.knockVz = (dz / dist) * impact + chassisBody.velocity.z * 0.42;
-    car.knockYawVel = ((dx * chassisBody.velocity.z - dz * chassisBody.velocity.x) >= 0 ? 1 : -1) * Math.min(5.0, impact * 0.35);
-    car.knockTimer = 2.4;
-    car.braking = true;
+    for (let k = 0; k < this.physicsColliders.length; k++) {
+      const col = this.physicsColliders[k];
+      const car = col.userData ? col.userData.trafficCar : null;
+      if (!car || !car.active) {
+        col.force.y += col.mass * 9.81;
+        col.velocity.setZero();
+        col.angularVelocity.setZero();
+        continue;
+      }
+
+      // Sustenta a altura do tráfego sobre o sampler de asfalto (evita colidir com milhares de triângulos do Trimesh)
+      const sy = this.nav ? this.nav.sampler.sample(col.position.x, col.position.z, col.position.y) : null;
+      if (sy !== null) {
+        if (col.position.y <= sy + 0.06 && col.velocity.y <= 0.6) {
+          col.position.y = sy;
+          col.velocity.y = 0;
+          col.force.y += col.mass * 9.81;
+        }
+      } else {
+        if (col.velocity.y < 0) col.velocity.y = 0;
+        col.force.y += col.mass * 9.81;
+      }
+
+      if (car.wrecked) {
+        // Carro atingido segue física dinâmica pura (atrito de pneus no asfalto e inércia livre, zero retorno mágico!)
+        const vx = col.velocity.x;
+        const vz = col.velocity.z;
+        const hSpd = Math.hypot(vx, vz);
+        if (hSpd > 0.04) {
+          const decel = hSpd < 0.7 ? Math.min(hSpd / dt, 6.0) : 4.6;
+          const fx = -(vx / hSpd) * decel * col.mass;
+          const fz = -(vz / hSpd) * decel * col.mass;
+          col.force.x += fx;
+          col.force.z += fz;
+        } else {
+          col.velocity.x = 0;
+          col.velocity.z = 0;
+        }
+        col.torque.y -= col.angularVelocity.y * 540.0;
+        col.angularVelocity.x *= 0.82;
+        col.angularVelocity.z *= 0.82;
+        car.knockVx = col.velocity.x;
+        car.knockVz = col.velocity.z;
+        car.knockYawVel = col.angularVelocity.y;
+      } else {
+        // Trânsito normal sendo conduzido na via com forças limitadas (nunca força penetração se houver toque)
+        const desVx = -Math.sin(car.yaw) * car.speed + THREE.MathUtils.clamp((car.pos.x - col.position.x) * 3.0, -3.5, 3.5);
+        const desVz = -Math.cos(car.yaw) * car.speed + THREE.MathUtils.clamp((car.pos.z - col.position.z) * 3.0, -3.5, 3.5);
+        col.force.x += THREE.MathUtils.clamp((desVx - col.velocity.x) * 8.0 * col.mass, -14000, 14000);
+        col.force.z += THREE.MathUtils.clamp((desVz - col.velocity.z) * 8.0 * col.mass, -14000, 14000);
+        this._dummyEuler.set(car.pitch, car.yaw, 0, 'YXZ');
+        this._dummyQuat.setFromEuler(this._dummyEuler);
+        col.quaternion.set(this._dummyQuat.x, this._dummyQuat.y, this._dummyQuat.z, this._dummyQuat.w);
+        col.angularVelocity.setZero();
+      }
+    }
   }
 
   update(dt, playerBody, gameState) {
@@ -3432,30 +3766,48 @@ class CityTrafficManager {
       if (!car.active) continue;
 
       const distToPlayer = Math.hypot(car.pos.x - px, car.pos.z - pz);
-      if (!car.edge || distToPlayer > maxCarR * 1.18 || Math.abs(car.pos.y - py) > 42) {
-        this.spawnCarNear(car, px, py, pz, false);
-        if (!car.edge) {
-          car.root.visible = false;
-          continue;
-        }
-      }
 
-      if (car.knockTimer > 0) {
-        car.knockTimer -= dt;
-        car.pos.x += car.knockVx * dt;
-        car.pos.z += car.knockVz * dt;
-        const damp = Math.exp(-3.2 * dt);
-        car.knockVx *= damp;
-        car.knockVz *= damp;
-        car.yaw += car.knockYawVel * dt;
-        car.knockYawVel *= damp;
-        const sy = this.nav.sampler.sample(car.pos.x, car.pos.z, car.pos.y);
-        if (sy !== null) car.pos.y = sy;
+      if (car.wrecked) {
+        car.wreckTimer -= dt;
+        if (car.collider) {
+          const col = car.collider;
+          car.pos.set(col.position.x, col.position.y, col.position.z);
+          this._dummyQuat.set(col.quaternion.x, col.quaternion.y, col.quaternion.z, col.quaternion.w);
+          this._dummyEuler.setFromQuaternion(this._dummyQuat, 'YXZ');
+          car.pitch = this._dummyEuler.x;
+          car.yaw = this._dummyEuler.y;
+          car.roll = this._dummyEuler.z;
+        } else {
+          // Sem collider acoplado (>6 colisões simultâneas): apenas desacelera naturalmente até sair de vista
+          car.pos.x += car.knockVx * dt;
+          car.pos.z += car.knockVz * dt;
+          const damp = Math.exp(-3.8 * dt);
+          car.knockVx *= damp;
+          car.knockVz *= damp;
+          car.yaw += car.knockYawVel * dt;
+          car.knockYawVel *= damp;
+          const sy = this.nav.sampler.sample(car.pos.x, car.pos.z, car.pos.y);
+          if (sy !== null) car.pos.y = sy;
+        }
         car.braking = true;
-        if (car.knockTimer <= 0 && distToPlayer > 28) {
+
+        const outOfView = !this._frustum.containsPoint(car.pos);
+        if (distToPlayer > 78 || (car.wreckTimer <= 0 && distToPlayer > 44 && outOfView)) {
           this.spawnCarNear(car, px, py, pz, false);
+          if (!car.edge) {
+            car.root.visible = false;
+            continue;
+          }
         }
       } else {
+        if (!car.edge || distToPlayer > maxCarR * 1.18 || Math.abs(car.pos.y - py) > 42) {
+          this.spawnCarNear(car, px, py, pz, false);
+          if (!car.edge) {
+            car.root.visible = false;
+            continue;
+          }
+        }
+
         // Direção atual para frente (-Z local rotacionado por yaw)
         const fwdX = -Math.sin(car.yaw);
         const fwdZ = -Math.cos(car.yaw);
@@ -3475,11 +3827,11 @@ class CityTrafficManager {
           }
         }
 
-        // Frear se houver outro carro IA à frente na faixa
+        // Frear se houver outro carro IA à frente na faixa (inclusive carros acidentados/parados!)
         for (let j = 0; j < this.carPool.length; j++) {
           if (j === i) continue;
           const other = this.carPool[j];
-          if (!other.active || !other.edge) continue;
+          if (!other.active) continue;
           if (Math.abs(other.pos.y - car.pos.y) > 3.0) continue;
           const rx = other.pos.x - car.pos.x;
           const rz = other.pos.z - car.pos.z;
@@ -3487,10 +3839,11 @@ class CityTrafficManager {
           if (dSq > 360) continue; // > 19m
           const lon = rx * fwdX + rz * fwdZ;
           const lat = Math.abs(-rx * fwdZ + rz * fwdX);
-          if (lon > 1.0 && lon < 18.0 && lat < 2.2) {
+          if (lon > 1.0 && lon < 18.0 && lat < 2.35) {
             const headingDot = fwdX * -Math.sin(other.yaw) + fwdZ * -Math.cos(other.yaw);
-            if (headingDot > 0.35) {
-              const safeSpd = lon < 7.0 ? 0 : Math.min(targetSpeed, other.speed * ((lon - 6.0) / 12.0));
+            if (other.wrecked || headingDot > 0.35) {
+              const otherSpd = other.wrecked ? 0 : other.speed;
+              const safeSpd = lon < 7.5 ? 0 : Math.min(targetSpeed, otherSpd * ((lon - 6.0) / 12.0));
               if (safeSpd < targetSpeed) {
                 targetSpeed = safeSpd;
                 braking = true;
@@ -3510,7 +3863,6 @@ class CityTrafficManager {
           const nextEdges = car.edge.to.outEdges;
           if (nextEdges && nextEdges.length > 0) {
             // Preferir seguir reto (~65%) ou fazer curva suave
-            const curD = car.edge.to.dIdx;
             const straight = nextEdges.find((e) => !e.isTurn);
             if (straight && Math.random() < 0.65) {
               car.edge = straight;
@@ -3521,7 +3873,10 @@ class CityTrafficManager {
             this.spawnCarNear(car, px, py, pz, false);
           }
         }
-        if (car.edge) this.evalCarPoseOnEdge(car);
+        if (car.edge) {
+          this.evalCarPoseOnEdge(car);
+          car.roll = 0;
+        }
       }
 
       // Atualizar mesh e luzes (com frustum & alcance culling para 60fps constantes)
@@ -3530,30 +3885,61 @@ class CityTrafficManager {
       car.root.visible = visibleNow;
       if (visibleNow) {
         car.root.position.copy(car.pos);
-        car.root.rotation.set(car.pitch, car.yaw, 0, 'YXZ');
-        car.headMat.opacity = isDarkHours ? 0.72 : 0.0;
+        car.root.rotation.set(car.pitch, car.yaw, car.roll || 0, 'YXZ');
+        car.headMat.opacity = isDarkHours && !car.wrecked ? 0.72 : 0.0;
         car.tailMat.opacity = car.braking ? 0.92 : (isDarkHours ? 0.45 : 0.08);
       }
 
-      if (renderDist < 38.0) {
+      if ((renderDist < 36.0 && Math.abs(car.pos.y - py) < 12.0) || (car.wrecked && renderDist < 48.0)) {
         nearCars.push({ car, dist: renderDist });
       }
     }
 
-    // Vincular os 6 corpos físicos cinemáticos aos 6 carros mais próximos do jogador
-    nearCars.sort((a, b) => a.dist - b.dist);
+    // Prioriza carros recém-batidos e os mais próximos para os 6 corpos físicos dinâmicos
+    nearCars.sort((a, b) => (b.car.wrecked ? 1 : 0) - (a.car.wrecked ? 1 : 0) || a.dist - b.dist);
+    const desiredCount = Math.min(this.physicsColliders.length, nearCars.length);
+    const desiredSet = new Set();
+    for (let k = 0; k < desiredCount; k++) {
+      desiredSet.add(nearCars[k].car);
+    }
+
+    // 1) Desacopla apenas colliders que saíram do conjunto próximo
     for (let k = 0; k < this.physicsColliders.length; k++) {
       const col = this.physicsColliders[k];
-      if (k < nearCars.length) {
-        const tc = nearCars[k].car;
-        col.userData.trafficCar = tc;
-        col.position.set(tc.pos.x, tc.pos.y, tc.pos.z);
-        this._dummyEuler.set(tc.pitch, tc.yaw, 0, 'YXZ');
-        this._dummyQuat.setFromEuler(this._dummyEuler);
-        col.quaternion.set(this._dummyQuat.x, this._dummyQuat.y, this._dummyQuat.z, this._dummyQuat.w);
-      } else {
+      const boundCar = col.userData.trafficCar;
+      if (boundCar && !desiredSet.has(boundCar)) {
+        boundCar.collider = null;
         col.userData.trafficCar = null;
-        col.position.set(0, -500, 0);
+        col.position.set(0, -500 - k * 4, 0);
+        col.velocity.setZero();
+        col.angularVelocity.setZero();
+      }
+    }
+
+    // 2) Vincula carros que entraram no raio físico inicializando estado UMA única vez
+    for (let k = 0; k < desiredCount; k++) {
+      const tc = nearCars[k].car;
+      if (tc.collider) continue;
+      let freeCol = null;
+      for (let m = 0; m < this.physicsColliders.length; m++) {
+        if (!this.physicsColliders[m].userData.trafficCar) {
+          freeCol = this.physicsColliders[m];
+          break;
+        }
+      }
+      if (!freeCol) break;
+      tc.collider = freeCol;
+      freeCol.userData.trafficCar = tc;
+      freeCol.position.set(tc.pos.x, tc.pos.y, tc.pos.z);
+      this._dummyEuler.set(tc.pitch, tc.yaw, tc.roll || 0, 'YXZ');
+      this._dummyQuat.setFromEuler(this._dummyEuler);
+      freeCol.quaternion.set(this._dummyQuat.x, this._dummyQuat.y, this._dummyQuat.z, this._dummyQuat.w);
+      if (tc.wrecked) {
+        freeCol.velocity.set(tc.knockVx, 0, tc.knockVz);
+        freeCol.angularVelocity.set(0, tc.knockYawVel, 0);
+      } else {
+        freeCol.velocity.set(-Math.sin(tc.yaw) * tc.speed, 0, -Math.cos(tc.yaw) * tc.speed);
+        freeCol.angularVelocity.setZero();
       }
     }
 
@@ -3650,13 +4036,18 @@ class CityTrafficManager {
       }
 
       const renderDist = Math.hypot(ped.pos.x - px, ped.pos.z - pz);
-      const visibleNow = renderDist < Math.min(95, maxPedR * 1.05) && (renderDist < 22 || this._frustum.containsPoint(ped.pos));
+      const pedMaxRenderR = IS_MOBILE_DEVICE ? Math.min(58, maxPedR * 1.05) : Math.min(92, maxPedR * 1.05);
+      const visibleNow = renderDist < pedMaxRenderR && (renderDist < 20 || this._frustum.containsPoint(ped.pos));
       ped.root.visible = visibleNow;
       if (visibleNow) {
         ped.root.position.copy(ped.pos);
         ped.root.rotation.set(ped.tumbleTimer > 0 ? 1.1 : 0, ped.yaw, 0, 'YXZ');
-        if (renderDist < 34 || ((this.frameCounter + i) & 1) === 0) {
-          ped.mixer.update(renderDist < 34 ? dt : dt * 2);
+        if (renderDist < 26) {
+          ped.mixer.update(dt);
+        } else if (renderDist < 42) {
+          if (((this.frameCounter + i) & 1) === 0) ped.mixer.update(dt * 2);
+        } else if (((this.frameCounter + i) % 3) === 0) {
+          ped.mixer.update(dt * 3);
         }
       }
     }
@@ -3945,18 +4336,27 @@ class MinimapRenderer {
 // 7. INICIALIZAÇÃO DO CENÁRIO 3D, LUZES DO CARRO, FÍSICA E LOOP PRINCIPAL
 // ============================================================================
 const container = document.getElementById('canvas-container');
-const isLikelyMobileDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (window.innerWidth <= 820);
 const renderer = new THREE.WebGLRenderer({
-  antialias: !isLikelyMobileDevice,
-  powerPreference: 'high-performance'
+  antialias: !IS_MOBILE_DEVICE,
+  stencil: false,
+  powerPreference: IS_MOBILE_DEVICE ? 'default' : 'high-performance'
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_MOBILE_DEVICE ? 1.15 : 1.5));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 container.appendChild(renderer.domElement);
+
+renderer.domElement.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  console.warn('Contexto WebGL perdido (pressão de GPU/VRAM).');
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  if (envTimeSystem) envTimeSystem.applyPreset(state.timeOfDay, true);
+  applyGraphicsQuality(state.graphicsQuality);
+});
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b8de);
@@ -4009,8 +4409,8 @@ class EnvironmentTimeSystem {
 
     // 1. Canvas limpo para o fundo do céu (scene.background)
     this.skyBgCanvas = document.createElement('canvas');
-    this.skyBgCanvas.width = 1024;
-    this.skyBgCanvas.height = 512;
+    this.skyBgCanvas.width = IS_MOBILE_DEVICE ? 512 : 1024;
+    this.skyBgCanvas.height = IS_MOBILE_DEVICE ? 256 : 512;
     this.skyBgCtx = this.skyBgCanvas.getContext('2d');
     this.skyBgTexture = new THREE.CanvasTexture(this.skyBgCanvas);
     this.skyBgTexture.mapping = THREE.EquirectangularReflectionMapping;
@@ -4025,14 +4425,11 @@ class EnvironmentTimeSystem {
     this.envTexture.mapping = THREE.EquirectangularReflectionMapping;
     this.envTexture.colorSpace = THREE.SRGBColorSpace;
 
-    // 3. CubeCamera para reflexos reais da cidade 3D em tempo real no modo ULTRA
-    this.cubeRenderTarget = new THREE.WebGLCubeRenderTarget(128, {
-      generateMipmaps: true,
-      minFilter: THREE.LinearMipmapLinearFilter,
-      colorSpace: THREE.SRGBColorSpace
-    });
-    this.cubeCamera = new THREE.CubeCamera(0.8, 500, this.cubeRenderTarget);
+    // 3. CubeCamera para reflexos reais no ULTRA: alocada sob demanda para não consumir VRAM no mobile/médio
+    this.cubeRenderTarget = null;
+    this.cubeCamera = null;
     this.cubeFaceIdx = 0;
+    this.cubeSkip = 0;
 
     // Nuvens procedurais determinísticas para o domo celeste e reflexos no capô
     this.clouds = [];
@@ -4409,6 +4806,10 @@ class EnvironmentTimeSystem {
 
     // Atualiza PMREM e IBL conforme qualidade gráfica
     if (this.graphicsPreset.reflections === 'off') {
+      if (this.prevRenderTarget) {
+        this.prevRenderTarget.dispose();
+        this.prevRenderTarget = null;
+      }
       this.scene.environment = null;
     } else {
       const renderTarget = this.pmremGenerator.fromEquirectangular(this.envTexture);
@@ -4450,6 +4851,17 @@ class EnvironmentTimeSystem {
 
   setGraphicsPreset(preset) {
     this.graphicsPreset = preset;
+    if (!preset.realtimeCube) {
+      if (this.cubeRenderTarget) {
+        this.cubeRenderTarget.dispose();
+        this.cubeRenderTarget = null;
+        this.cubeCamera = null;
+      }
+      if (this.prevCarCubePmrem) {
+        this.prevCarCubePmrem.dispose();
+        this.prevCarCubePmrem = null;
+      }
+    }
     if (this.envCanvas.width !== preset.envResolution[0] || this.envCanvas.height !== preset.envResolution[1]) {
       this.envCanvas.width = preset.envResolution[0];
       this.envCanvas.height = preset.envResolution[1];
@@ -4458,8 +4870,23 @@ class EnvironmentTimeSystem {
     this.renderSkyEquirectangular(this.hour, elev);
   }
 
+  ensureRealtimeCubeTarget() {
+    if (!this.cubeRenderTarget) {
+      this.cubeRenderTarget = new THREE.WebGLCubeRenderTarget(128, {
+        generateMipmaps: true,
+        minFilter: THREE.LinearMipmapLinearFilter,
+        colorSpace: THREE.SRGBColorSpace
+      });
+      this.cubeCamera = new THREE.CubeCamera(0.8, 500, this.cubeRenderTarget);
+      this.cubeFaceIdx = 0;
+    }
+  }
+
   updateRealtimeCubeReflection(carPos) {
     if (!this.graphicsPreset.realtimeCube || !corsaChassisVisual || !carPos) return;
+    this.cubeSkip = (this.cubeSkip || 0) ^ 1;
+    if (this.cubeSkip) return;
+    this.ensureRealtimeCubeTarget();
 
     this.cubeCamera.position.set(carPos.x, carPos.y + 0.45, carPos.z);
     this.cubeCamera.updateMatrixWorld();
@@ -4719,12 +5146,13 @@ function toggleGraphicsModal(forceOpen) {
 const world = new CANNON.World();
 world.gravity.set(0, -9.81, 0);
 world.broadphase = new CANNON.SAPBroadphase(world);
-world.solver.iterations = 12;
+world.solver.iterations = 8;
 world.defaultContactMaterial.friction = 0.3;
 
 const groundMat = new CANNON.Material('ground');
 const wheelMat = new CANNON.Material('wheel');
 const chassisMat = new CANNON.Material('chassis');
+const trafficCarMat = new CANNON.Material('trafficCar');
 
 world.addContactMaterial(
   new CANNON.ContactMaterial(groundMat, wheelMat, {
@@ -4744,6 +5172,28 @@ world.addContactMaterial(
   new CANNON.ContactMaterial(chassisMat, chassisMat, {
     friction: 0.2,
     restitution: 0.2
+  })
+);
+world.addContactMaterial(
+  new CANNON.ContactMaterial(chassisMat, trafficCarMat, {
+    friction: 0.14,
+    restitution: 0.08,
+    contactEquationStiffness: 1.8e6,
+    contactEquationRelaxation: 4
+  })
+);
+world.addContactMaterial(
+  new CANNON.ContactMaterial(trafficCarMat, trafficCarMat, {
+    friction: 0.25,
+    restitution: 0.10,
+    contactEquationStiffness: 1.8e6,
+    contactEquationRelaxation: 4
+  })
+);
+world.addContactMaterial(
+  new CANNON.ContactMaterial(trafficCarMat, groundMat, {
+    friction: 0.12,
+    restitution: 0.0
   })
 );
 
@@ -4847,6 +5297,7 @@ async function initSimulation() {
 
     updateLoadingProgress(22);
     const splitResult = splitCorsaModelIntoChassisAndWheels(corsaGltf.scene);
+    corsaGltf.scene = null;
     corsaChassisVisual = splitResult.chassisGroup;
     corsaWheelVisuals = splitResult.wheelVisualGroups;
 
@@ -4854,9 +5305,10 @@ async function initSimulation() {
 
     scene.add(corsaChassisVisual);
     corsaWheelVisuals.forEach((wg) => scene.add(wg));
+    await new Promise((r) => setTimeout(r, 0));
 
     updateLoadingProgress(25);
-    const cityGltf = await new Promise((res, rej) => {
+    let cityGltf = await new Promise((res, rej) => {
       gltfLoader.load(
         './assets/mapas/San Francisco.glb',
         res,
@@ -4869,15 +5321,21 @@ async function initSimulation() {
       );
     });
 
-    const cityRoot = cityGltf.scene;
+    let cityRoot = cityGltf.scene;
     cityRoot.scale.set(CITY_SCALE, CITY_SCALE, CITY_SCALE);
-    scene.add(cityRoot);
+    cityRoot.updateMatrixWorld(true);
 
     updateLoadingProgress(46);
     await buildCityPhysicsFromModel(cityRoot, world, groundMat, chassisMat, (pct) => {
       updateLoadingProgress(46 + pct * 0.12);
     });
+    // Gera grafo viário/calçadas e redimensiona texturas antes do batching que descarta geometrias brutas
+    cityTrafficSystem.buildCityGraph(cityRoot);
+    optimizeSceneTexturesAndMaterials(cityRoot, IS_MOBILE_DEVICE ? 512 : 1024, IS_LOW_VRAM_DEVICE);
     scene.add(buildBatchedCityRenderGroup(cityRoot));
+    cityRoot = null;
+    cityGltf = null;
+    await new Promise((r) => setTimeout(r, 0));
 
     updateLoadingProgress(58);
     await carAudio.loadAll((p) => {
@@ -4888,7 +5346,7 @@ async function initSimulation() {
     setupCorsaPhysics(splitResult.chassisComOffsetY);
 
     updateLoadingProgress(64);
-    await cityTrafficSystem.loadAssetsAndBuild(cityRoot, world, chassisMat, gltfLoader, (p) => {
+    await cityTrafficSystem.loadAssetsAndBuild(null, world, trafficCarMat, gltfLoader, (p) => {
       updateLoadingProgress(64 + p * 36);
     });
 
@@ -4939,6 +5397,7 @@ let smoothRollCouple = 0;
 
 function applyChassisSimulationForces() {
   if (!vehicle || !chassisBody || !state.loaded) return;
+  cityTrafficSystem.syncPhysicsPreStep(1 / 60);
 
   // 1. Barras estabilizadoras dianteira (0-1) e traseira (2-3) atuando em cada substep de física
   applyAntiRollPair(vehicle.wheelInfos[0], vehicle.wheelInfos[1], CORSA_SPECS.frontAntiRollStiffness);
@@ -7058,9 +7517,26 @@ function animate(now) {
   lastTime = now;
 
   if (state.loaded) {
-    world.step(1 / 60, dt, 3);
-    if (chassisBody && chassisBody.position.y < 12.0) {
-      resetCarToSpawn(state.spawnIdx);
+    world.step(1 / 60, dt, IS_MOBILE_DEVICE ? 4 : 5);
+    if (chassisBody) {
+      // Impede catapultamento vertical absurdo em impactos com tráfego/muros
+      if (chassisBody.velocity.y > 10.5) chassisBody.velocity.y = 10.5;
+
+      // Recuperação anti-tunneling usando o mapa de alturas das ruas (impede atravessar o asfalto na queda)
+      const navSampler = cityTrafficSystem.nav && cityTrafficSystem.nav.sampler;
+      if (navSampler) {
+        const groundY = navSampler.sample(chassisBody.position.x, chassisBody.position.z, chassisBody.position.y + 1.2);
+        if (groundY !== null && chassisBody.position.y < groundY + 0.08 && chassisBody.position.y > groundY - 8.0 && chassisBody.velocity.y < 1.0) {
+          chassisBody.position.y = groundY + 0.56;
+          if (chassisBody.velocity.y < 0) chassisBody.velocity.y = 0;
+          chassisBody.angularVelocity.x *= 0.25;
+          chassisBody.angularVelocity.z *= 0.25;
+        }
+      }
+
+      if (chassisBody.position.y < 12.0) {
+        resetCarToSpawn(state.spawnIdx);
+      }
     }
     updateVehiclePhysicsAndEffects(dt);
     syncVisualMeshes();
